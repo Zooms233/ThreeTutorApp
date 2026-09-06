@@ -270,7 +270,7 @@ class StorageService {
         .trim();
   }
 
-  //列出课程全部课次文件路径（旧 → 新排序）：只查文件名单，不读内容（按需加载用）
+  //列出课程全部课次文件路径（旧 → 新）：按文件名内课次号数值排序（04：按 lesson 数值）
   Future<List<String>> listChatFiles(String courseName) async {
     final chatDir = Directory('${(await getCourseDir(courseName)).path}/CHAT');
     final files = <String>[];
@@ -280,7 +280,12 @@ class StorageService {
           files.add(entity.path);
         }
       }
-      files.sort(); //文件名含日期与课次，字典序即时间序
+      int lessonNo(String path) {
+        final m = RegExp(r'(\d+)课').firstMatch(path.split(Platform.pathSeparator).last);
+        return m == null ? 0 : int.parse(m.group(1)!);
+      }
+
+      files.sort((a, b) => lessonNo(a).compareTo(lessonNo(b)));
     }
     return files;
   }
@@ -299,47 +304,71 @@ class StorageService {
     return entries;
   }
 
-  //当前会话目标：最新课次文件路径 + 本课授课导师；无课次时自动开第 1 课
-  Future<Map<String, dynamic>> getCurrentLesson(String courseName) async {
-    final files = await listChatFiles(courseName);
-    if (files.isEmpty) return startNewLesson(courseName);
+  //课次文件路径：第N课.jsonl（文件名不带日期，跨度可跨多天；排序按 lesson 数值）
+  Future<String> lessonPath(String courseName, int lesson) async =>
+      '${(await getCourseDir(courseName)).path}/CHAT/第$lesson课.jsonl';
 
-    //最新课次：读 meta 拿导师与课次号
-    final lines = (await File(files.last).readAsLines())
-        .where((l) => l.trim().isNotEmpty)
-        .toList();
-    final meta = jsonDecode(lines.first) as Map<String, dynamic>;
-    return {
-      'path': files.last,
-      'tutor': meta['tutor'] as String? ?? '导师',
-      'lesson': meta['lesson'],
-    };
-  }
-
-  //开启新课次：建档写 meta（按钮「开始上课」与首课共用；文件已存在则幂等返回既有）
-  //lesson = 累计课时 + 1，tutor = STATE.next_tutor（轮换推进在课后更新，此处只取）
-  Future<Map<String, dynamic>> startNewLesson(String courseName) async {
-    final courseDir = await getCourseDir(courseName);
-    final state = await loadCourseState(courseName);
-    final now = DateTime.now();
-    final date =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final lesson = (state['lessons'] as int? ?? 0) + 1;
-    final tutor = state['next_tutor'] as String? ?? '导师';
-    final path = '${courseDir.path}/CHAT/$date-第$lesson课.jsonl';
-
-    await Directory('${courseDir.path}/CHAT').create(recursive: true);
+  //建课次文件（幂等）：meta 预填 lesson/tutor/date=今日/status=idle（04：交流期立即就位）
+  Future<String> createLessonFile(
+    String courseName,
+    int lesson,
+    String tutor,
+  ) async {
+    final path = await lessonPath(courseName, lesson);
+    await Directory('${(await getCourseDir(courseName)).path}/CHAT').create(recursive: true);
     if (!File(path).existsSync()) {
+      final now = DateTime.now();
+      final date =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       await File(path).writeAsString(
         '${jsonEncode({
           'type': 'meta',
           'lesson': lesson,
           'date': date,
           'tutor': tutor,
-          'status': 'ongoing',
+          'status': 'idle',
         })}\n',
       );
     }
+    return path;
+  }
+
+  //meta 整行改写：合并 patch 后重写首行（status 推进 idle→ongoing→ended、date 改写实际完成日）
+  Future<void> patchChatMeta(String path, Map<String, dynamic> patch) async {
+    final file = File(path);
+    final lines = (await file.readAsLines()).where((l) => l.trim().isNotEmpty).toList();
+    final meta = {
+      ...jsonDecode(lines.first) as Map<String, dynamic>,
+      ...patch,
+    };
+    lines[0] = jsonEncode(meta);
+    await file.writeAsString("${lines.join('\n')}\n");
+  }
+
+  //当前会话目标：最新课次文件路径 + 本课授课导师；无课次时建第 1 课（idle 预填，04 语义）
+  Future<Map<String, dynamic>> getCurrentLesson(String courseName) async {
+    var files = await listChatFiles(courseName);
+    if (files.isEmpty) {
+      final state = await loadCourseState(courseName);
+      await createLessonFile(courseName, 1, state['next_tutor'] as String? ?? '导师');
+      files = await listChatFiles(courseName);
+    }
+    final path = files.last;
+    final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
+    return {
+      'path': path,
+      'tutor': meta['tutor'] as String? ?? '导师',
+      'lesson': meta['lesson'],
+    };
+  }
+
+  //开启新课次：建榃档写 meta（status=idle 预填；文件已存在则幂等返回既有）
+  //lesson = 累计课时 + 1，tutor = STATE.next_tutor（轮换推进在课后更新，此处只取）
+  Future<Map<String, dynamic>> startNewLesson(String courseName) async {
+    final state = await loadCourseState(courseName);
+    final lesson = (state['lessons'] as int? ?? 0) + 1;
+    final tutor = state['next_tutor'] as String? ?? '导师';
+    final path = await createLessonFile(courseName, lesson, tutor);
     return {'path': path, 'tutor': tutor, 'lesson': lesson};
   }
 
@@ -422,6 +451,12 @@ class StorageService {
     final file = File('${courseDir.path}/STATE.json');
     if (!file.existsSync()) return {};
     return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  }
+
+  //STATE 单行重写（课后更新第 1 步：position/next_tutor/lessons/last_date）
+  Future<void> saveCourseState(String courseName, Map<String, dynamic> state) async {
+    final courseDir = await getCourseDir(courseName);
+    await File('${courseDir.path}/STATE.json').writeAsString(jsonEncode(state));
   }
 
   //读取课程 PROGRESS.jsonl（每行一个知识点；展示时新知识点在前）
