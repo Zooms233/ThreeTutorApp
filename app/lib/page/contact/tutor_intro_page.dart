@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/contact/create_course_page.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
@@ -128,7 +129,7 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
           onTap: () {
             Navigator.push(
               context,
-              MaterialPageRoute(
+              CupertinoPageRoute(
                 builder: (context) => TutorProfilePage(
                   worldName: widget.worldName,
                   fileName: widget.fileName,
@@ -161,7 +162,7 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
   Future<void> _openCreateCourse() async {
     await Navigator.push(
       context,
-      MaterialPageRoute(
+      CupertinoPageRoute(
         builder: (context) => CreateCoursePage(worldName: widget.worldName),
       ),
     );

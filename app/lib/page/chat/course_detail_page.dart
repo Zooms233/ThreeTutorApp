@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/chat/relation_page.dart';
 import 'package:tutor_chat/service/storage.dart';
@@ -101,7 +102,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
+            CupertinoPageRoute(
               builder: (context) => RelationPage(courseName: widget.courseName),
             ),
           );

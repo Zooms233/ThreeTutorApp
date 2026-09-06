@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/chat/group_chat_page.dart';
 import 'package:tutor_chat/service/storage.dart';
@@ -89,7 +90,7 @@ class _TabChatState extends State<TabChat> {
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
+            CupertinoPageRoute(
               builder: (context) => GroupChatPage(courseName: name),
             ),
           );

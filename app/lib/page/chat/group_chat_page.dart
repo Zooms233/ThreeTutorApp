@@ -1,4 +1,8 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:tutor_chat/page/chat/course_detail_page.dart';
 import 'package:tutor_chat/service/storage.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
@@ -27,6 +31,10 @@ class _ChatItem {
 class _GroupChatPageState extends State<GroupChatPage> {
   //初始补足阈值：已加载消息达到此数量即停止向前补（约一屏消息量）
   static const _initialMinMessages = 20;
+
+  //是否桌面端（桌面支持 Ctrl+Enter 快捷发送；移动端软键盘 Enter 即换行）
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
   List<String> _files = []; //全部课次文件路径（旧 → 新，只查名单不读内容）
   List<Map<String, dynamic>> _entries = []; //已加载的消息条目（从最新往前）
@@ -106,13 +114,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _tutorFiles = tutorFiles;
       _courseDirPath = courseDir.path;
       _learnerName = learner['name'] as String? ?? '我';
-      _items = _buildItems(entries, hasMore: _hasMore);
+      _items = _buildItems(entries, hasMore: _hasMore).reversed.toList();
       _loading = false;
     });
-    _scrollToBottom(); //微信行为：进入时定位到最新消息
   }
 
-  //上滑到顶：加载更早的课次（每次 1 个），并保持底部视觉位置不跳动
+  //上滑到顶：加载更早的课次（每次 1 个）
+  //reverse 列表中更早内容在远端，插入后当前视口天然不动，无需手动锚定
   Future<void> _loadEarlier() async {
     if (!_hasMore || _loadingMore || _loading) return;
     _loadingMore = true;
@@ -120,36 +128,20 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final index = _files.length - _loadedCount - 1; //下一个要加载的更早课次
     final earlier = await StorageService().loadChatFile(_files[index]);
 
-    //插入前记录「当前视口距底部」的距离，插入后按此距离重新锚定（底部内容不变）
-    final maxBefore = _scrollController.hasClients
-        ? _scrollController.position.maxScrollExtent
-        : 0.0;
-    final anchorBefore = (maxBefore - _scrollController.offset).clamp(
-      0.0,
-      maxBefore,
-    );
-
     if (!mounted) return;
     setState(() {
-      _entries = [...earlier, ..._entries];
+      _entries = [...earlier, ..._entries]; //更早条目插入头部，保持旧→新顺序
       _loadedCount++;
       _hasMore = _loadedCount < _files.length;
-      _items = _buildItems(_entries, hasMore: _hasMore);
-    });
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(
-          _scrollController.position.maxScrollExtent - anchorBefore,
-        );
-      }
+      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
     });
     _loadingMore = false;
   }
 
-  //滚动监听：接近顶部时触发加载更早课次
+  //滚动监听：接近更早内容端（reverse 列表的大 offset 方向）时加载更早课次
   void _onScroll() {
-    if (_scrollController.position.pixels <= 60) {
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 60) {
       _loadEarlier();
     }
   }
@@ -180,7 +172,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _currentTutor = tutorName;
       _sending = true; //模拟回复生成中
       _entries = [..._entries, userMessage];
-      _items = _buildItems(_entries, hasMore: _hasMore);
+      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
     });
     _scrollToBottom();
 
@@ -198,18 +190,16 @@ class _GroupChatPageState extends State<GroupChatPage> {
     setState(() {
       _sending = false;
       _entries = [..._entries, reply];
-      _items = _buildItems(_entries, hasMore: _hasMore);
+      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
     });
     _scrollToBottom();
   }
 
-  //滚动到最底部（最新消息）
+  //滚动到最底部（最新消息；reverse 列表的 offset 0 即底部）
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
-    });
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
   }
 
   //把消息流条目转成渲染单元（插入课次分隔行与「下课后」分隔行）
@@ -270,7 +260,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
+                CupertinoPageRoute(
                   builder: (context) => CourseDetailPage(
                     courseName: widget.courseName,
                   ),
@@ -296,6 +286,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   Widget _buildMessageList() {
     return ListView.builder(
       controller: _scrollController,
+      reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _items.length,
       itemBuilder: (context, index) {
@@ -307,14 +298,22 @@ class _GroupChatPageState extends State<GroupChatPage> {
     );
   }
 
-  //系统分隔行：课次分隔 / 下课后 / 加入群聊 / 没有更多了（灰色小字居中）
+  //系统分隔行：两侧细线 + 居中小字（课次分隔 / 下课后 / 加入群聊 / 没有更多了）
   Widget _buildDivider(String text) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-      child: Text(
-        '--- $text ---',
-        textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 24),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+            ),
+          ),
+          const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+        ],
       ),
     );
   }
@@ -434,28 +433,57 @@ class _GroupChatPageState extends State<GroupChatPage> {
       child: Row(
         children: [
           Expanded(
-            child: TextField(
-              controller: _inputController,
-              enabled: !_sending, //模拟回复期间暂锁
-              decoration: const InputDecoration(
-                hintText: '输入消息…',
-                hintStyle: TextStyle(fontSize: 15),
-                border: InputBorder.none,
-                isDense: true,
+            child: Focus(
+              //桌面端：Ctrl+Enter 发送，Enter 换行；移动端不拦截（软键盘 Enter 即换行，靠按钮发送）
+              onKeyEvent: (node, event) {
+                if (!_isDesktop) return KeyEventResult.ignored;
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.enter &&
+                    HardwareKeyboard.instance.isControlPressed) {
+                  if (_inputController.text.trim().isNotEmpty && !_sending) {
+                    _sendMessage();
+                  }
+                  return KeyEventResult.handled; //吞掉按键，避免插入换行
+                }
+                return KeyEventResult.ignored;
+              },
+              child: TextField(
+                controller: _inputController,
+                enabled: !_sending, //模拟回复期间暂锁
+                minLines: 1,
+                maxLines: 6, //多行输入，超过 6 行内部滚动
+                keyboardType: TextInputType.multiline,
+                decoration: InputDecoration(
+                  hintText: _isDesktop
+                      ? '输入消息…（Ctrl+Enter 发送，Enter 换行）'
+                      : '输入消息…',
+                  hintStyle: const TextStyle(fontSize: 13),
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+                style: const TextStyle(fontSize: 15),
               ),
-              style: const TextStyle(fontSize: 15),
             ),
           ),
           const SizedBox(width: 8),
-          //监听输入内容变化，实时启停发送按钮
+          //监听输入内容变化，实时启停发送按钮（微信式圆形绿底纸飞机）
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: _inputController,
             builder: (context, value, _) {
               final canSend = value.text.trim().isNotEmpty && !_sending;
-              return FilledButton(
+              return IconButton(
                 onPressed: canSend ? _sendMessage : null,
-                style: FilledButton.styleFrom(minimumSize: const Size(64, 36)),
-                child: const Text('发送', style: TextStyle(fontSize: 14)),
+                icon: Icon(
+                  Icons.send_rounded,
+                  size: 20,
+                  color: canSend ? Colors.white : const Color(0xFFFFFFFF),
+                ),
+                style: IconButton.styleFrom(
+                  backgroundColor: canSend
+                      ? const Color(0xFF07C160)
+                      : const Color(0xFFD8D8D8),
+                  minimumSize: const Size(40, 40),
+                ),
               );
             },
           ),

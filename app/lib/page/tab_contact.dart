@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/contact/tutor_intro_page.dart';
 import 'package:tutor_chat/service/storage.dart';
@@ -208,7 +209,7 @@ class _TabContactState extends State<TabContact> {
             onTap: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
+                CupertinoPageRoute(
                   builder: (context) => TutorIntroPage(
                     worldName: world,
                     fileName: tutor['file'] as String,

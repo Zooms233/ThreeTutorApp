@@ -256,7 +256,7 @@ class _TabSettingState extends State<TabSetting> {
   static String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  //API 配置对话框：三项输入保存至 CONFIG.json（保留既有字段如 username）
+  //API 配置对话框：三项输入保存至 CONFIG.json
   Future<void> _showApiConfigDialog() async {
     final urlController = TextEditingController(
       text: _config['apiUrl'] as String? ?? '',
@@ -310,7 +310,7 @@ class _TabSettingState extends State<TabSetting> {
     );
     if (saved != true || !mounted) return; //用户取消
 
-    //保存（只更新三项，保留 username 等既有字段）
+    //保存（只更新三项，其余字段原样保留）
     setState(() {
       _config['apiUrl'] = urlController.text.trim();
       _config['apiKey'] = keyController.text.trim();

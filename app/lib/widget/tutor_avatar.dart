@@ -31,15 +31,15 @@ class TutorAvatar extends StatelessWidget {
     return null;
   }
 
-  //首字底色：按名字 hash 从色板取色，多会话时有区分度
-  Color _backgroundColor() {
+  //首字底色：按名字 hash 从渐变色板取色（同色系深浅对角渐变，多会话有区分度）
+  List<Color> _gradientColors() {
     const palette = [
-      Color(0xFF07C160), //微信绿
-      Color(0xFF306CFF), //蓝（与应用图标同色）
-      Color(0xFFFA9D3B), //橙
-      Color(0xFF6467F0), //紫
-      Color(0xFF10AEFF), //青
-      Color(0xFFFA5151), //红
+      [Color(0xFF42B868), Color(0xFF2E8F4E)], //绿
+      [Color(0xFF5A8DEE), Color(0xFF3D6BD8)], //蓝
+      [Color(0xFFFFA94D), Color(0xFFE8853A)], //橙
+      [Color(0xFF9187F0), Color(0xFF6F65D8)], //紫
+      [Color(0xFF4FC3F7), Color(0xFF2E9FD4)], //青
+      [Color(0xFFFF8A8A), Color(0xFFE56B6B)], //粉红
     ];
     var sum = 0;
     for (final rune in name.runes) {
@@ -72,11 +72,17 @@ class TutorAvatar extends StatelessWidget {
     );
   }
 
-  //首字占位：色块底 + 白色首字居中
+  //首字占位：对角渐变底 + 白色首字居中
   Widget _buildPlaceholder() {
     return Container(
-      color: _backgroundColor(),
       alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: _gradientColors(),
+        ),
+      ),
       child: Text(
         _firstChar,
         style: TextStyle(
