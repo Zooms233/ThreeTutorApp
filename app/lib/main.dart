@@ -32,8 +32,8 @@ class MyApp extends StatelessWidget {
       title: 'TutorChat',
       debugShowCheckedModeBanner: false, //隐藏右上角 DEBUG 横幅（仅 debug 运行时显示，release 本来就没有）
       theme: ThemeData(
-        //fontFamily 指定系统已装字体：Windows 用微软雅黑；其他平台自动回退系统默认
-        fontFamily: 'Microsoft YaHei',
+        //fontFamily：思源黑体（内置 assets/fonts，Regular + Bold）；LaTeX 公式同步该字号与字距
+        fontFamily: 'SourceHanSansCN',
         //微信绿作为种子色：全局强调色（按钮、水波纹、选中态）
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF07C160)),
         //微信浅色模式基础底色：页面与顶栏同为浅灰，列表内容用白色行浮起

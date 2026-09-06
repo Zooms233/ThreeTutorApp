@@ -1,0 +1,91 @@
+# 04 LLM 调用设计
+
+> 一次请求 = 读档 → 组装 → 调用 → 写档；LLM 无状态，app 每次重建完整上下文。SSE 解析与重试退避按 pi `packages/ai` 规则实现（仅取其规则不搬其代码）。
+
+## 可载入资源
+
+- 教学规则：app 常量——苏格拉底教学法（禁止直接讲授/一次一问/引导不纠正/小题检验）+ 节奏（学习者决定下课/宁透不赶）+ 角色扮演（斜体旁白/颜文字/不破第四面墙/执行静默）+ 反调情
+- 问答规则：app 常量——认真答疑、可翻教材；不推进教学（不出题/不写进度/不替换上课），想系统学则引导走详情页按钮（开课唯一入口）
+- 聊天规则：app 常量——日常闲聊不教学，生活内容为主
+- 导师档案：`tutor_a~c.json`——姓名/性格/说话风格/示例句/与学习者的关系
+- 学习者档案：`LEARNER.json`——称呼/动机/知识背景/故事
+- STATE：`STATE.json`——当前位置/下任导师/累计课时/最近上课日期
+- PROGRESS：`PROGRESS.jsonl`——知识点短名 + 最新状态块（✓△✗ / 日期 / 错因）
+- 教材：`TEXTBOOK/*.md`——按 STATE.position 取当前节（节标题到下一个同级标题之间），超 8000 字截断
+- 对话：`CHAT/第N课.jsonl` 全部 message 行——meta 行不映射；user→user、tutor→assistant 原文原样；用户消息 time 并入 content 头部；连续 user 消息合并；全文件历史（含文件头闲聊段）
+- 调度指令：运行时拼接，追加请求尾部，不写入 CHAT（文本见下）
+- 更新指令 + PROGRESS 规范：app 常量，仅课后更新请求使用
+- 群聊规范：app 常量，仅导师群聊生成使用——生活内容至少过半、禁止旁白星号、发言模式随机（一/二/三人，二最常见）、消息总数约 10 条、教学信息顺带提及
+- 运行时注入（非文件）：今日日期=当天日期
+
+载入顺序即缓存分层：稳定在前、易变靠后（规则 → 档案 → 状态 → 日期/教材 → 对话历史）。前缀字节级稳定 = 命中（约 1/10 计价）；稳定段内禁止插入动态数据；换导师 = 档案变 = 缓存重建（自然边界）。课后更新与群聊生成为独立请求，不走此分层。
+
+## 场景与载入
+
+- 问答：idle 期一对一答疑，next_tutor 单人直接回应，无需前缀选人——问答规则 + next_tutor 导师档案 + 学习者档案 + 教材（若有）+ 对话
+- 教学（ongoing）：本课导师（meta.tutor）回应——教学规则 + 本课导师档案 + 学习者档案 + STATE + PROGRESS + 今日日期 + 教材 + 对话
+  - 课前问候：按钮「开始上课」触发，meta idle→ongoing，请求尾部追加调度指令（问候）
+  - 上课对话：用户消息驱动
+  - 下课总结：按钮「今天就到这里」触发，请求尾部追加调度指令（总结），落档后自动执行课后更新
+- 课后更新：下课总结落档后自动执行，`json_object` 非流式——更新指令 + PROGRESS 规范 + PROGRESS（现有知识点清单，供沿用短名） + 本课导师档案 + 对话
+- 导师群聊生成：课后更新完成后自动执行，聊天职责的自动版，输出若干条 `{导师名}: {内容}` 写入下一课文件头——群聊规范 + 三位导师档案 + 本课对话
+- 聊天：idle 且 toggle 激活，回应者取决于用户消息指向的导师（点名/接话谁就谁回应），回复格式 `{导师名}: {内容}` 单条一位导师，app 解析前缀（未命中则 name 取 meta.tutor）——聊天规则 + 三位导师档案 + 对话
+
+## 触发与消息流向
+
+输入框发送的消息三态，由最新课次文件 status 与 toggle 唯一确定：
+
+- idle 且未上过课（lessons = 0）→ 问答（此时无 toggle）
+- idle 且上过课，toggle 未激活（默认）→ 问答
+- idle 且上过课，toggle 激活 → 聊天
+- ongoing → 教学（toggle 不显示）
+
+toggle 显示条件：idle 且 lessons ≥ 1；默认不激活，状态仅会话内存，不落盘。通用约束：先写后说——用户消息落档后才发请求，回复落档后才解锁输入框；日期等确定性计算全部 app 完成。
+
+## 调度指令文本
+
+- 问候：「（课程开始。以{导师名}的身份打招呼，可提及生活琐事，然后宣布今天的学习内容。）」
+- 总结：「（学习者表示今天到这里。以符合人设的方式总结本课核心逻辑链，若触及后续内容可留一句悬念，然后告别。不要重复宣布新任务。）」
+
+## 失败处理
+
+- 三种对话职责：重试耗尽 → 输入框解锁，用户消息已留档（悬空），再发时连续合并消化
+- 课前问候失败：meta 保持 ongoing，用户直接发消息即走教学上课对话
+- 下课总结失败：meta 保持 ongoing，按钮仍为「今天就到这里」，重新点击即重跑总结 + 课后更新
+- 课后更新失败（JSON 解析重试 1 次后仍失败）：meta 保持 ongoing、下一课文件不创建，输入框恢复可用，重新点击重跑
+- 导师群聊生成失败：跳过，不阻塞课后更新其余成果
+
+## 课后更新写档（解析成功后按序执行，全部 app 端计算）
+
+输出契约：
+
+```json
+{
+  "position": "3-2 化学平衡移动",
+  "progress": [
+    { "name": "氧化还原反应", "status": "✓", "mistake": null },
+    { "name": "电化学计算", "status": "△", "mistake": "混淆常数与速率" }
+  ],
+  "relation": "本课导师与学习者的关系段落（态度有可感变化才改，每次只前进一步；无变化则原样返回现文）"
+}
+```
+
+JSON 提取：剥离 ```json 围栏 → `jsonDecode`；失败则整请求重试 1 次（组装原样重发）。
+
+1. STATE 单行重写：position 取 LLM 输出；next_tutor 按 tutor_a→b→c 轮换推进；lessons+1；last_date=今日
+2. PROGRESS：新知识点追加一行；已有知识点整行重写（records 追加新状态块）；date=今日、review=今日+偏移（✓+7d / △+3d / ✗+1d）
+3. relation 与现文有差异 → 重写本课导师档案的 relation 字段；无差异不写
+4. 本课 meta 整行改写：status→ended、date→今日（实际完成日，热力图统计源；lesson/tutor 保持）
+5. 创建下一课文件 `CHAT/第{N+1}课.jsonl`：meta 预填（lesson=N+1、tutor=轮换后导师、date=今日、status=idle）→ 群聊生成写档于此文件头 → 全部完成后输入框恢复可用（此时 lessons ≥ 1，toggle 开始显示）
+
+## 协议层（client.dart）
+
+- 请求：POST `<apiUrl>/chat/completions`，头 `Authorization: Bearer <apiKey>`；CONFIG 三项（apiUrl/apiKey/model）来自设置页；`temperature`/`max_tokens` 用服务商默认
+- 字段：model、stream=true（仅课后更新非流式）、messages、stream_options=`{"include_usage": true}`（仅流式）、response_format=`{"type":"json_object"}`（仅课后更新）
+- 本项目参数：最多 3 次尝试（408/409/429/5xx/网络异常可重试，退避按 pi 规则）；连接与响应头超时 30s；流式无新数据 120s 判死（按断流处理，已收内容丢弃进重试）
+- usage 兼容链：cacheRead = `prompt_tokens_details.cached_tokens` ?? `prompt_cache_hit_tokens`（DeepSeek）?? `cached_tokens`；input = prompt_tokens − cacheRead；仅 stdout 调试输出，不写入 CHAT。验收：课堂第 2 轮起 cacheRead ≈ system + 历史长度
+- 发送前清理孤立 Unicode 代理对（防 400）
+
+## 后续扩展
+
+超长历史裁剪（pi compaction）、流式打字机渲染、usage 成本曲线——本期不做。

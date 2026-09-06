@@ -299,25 +299,27 @@ class StorageService {
     return entries;
   }
 
-  //当前会话目标：最新课次文件路径 + 本课授课导师；无课次时按 STATE 自动开第 1 课
+  //当前会话目标：最新课次文件路径 + 本课授课导师；无课次时自动开第 1 课
   Future<Map<String, dynamic>> getCurrentLesson(String courseName) async {
-    final courseDir = await getCourseDir(courseName);
     final files = await listChatFiles(courseName);
+    if (files.isEmpty) return startNewLesson(courseName);
 
-    if (files.isNotEmpty) {
-      //最新课次：读 meta 拿导师与课次号
-      final lines = (await File(files.last).readAsLines())
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
-      final meta = jsonDecode(lines.first) as Map<String, dynamic>;
-      return {
-        'path': files.last,
-        'tutor': meta['tutor'] as String? ?? '导师',
-        'lesson': meta['lesson'],
-      };
-    }
+    //最新课次：读 meta 拿导师与课次号
+    final lines = (await File(files.last).readAsLines())
+        .where((l) => l.trim().isNotEmpty)
+        .toList();
+    final meta = jsonDecode(lines.first) as Map<String, dynamic>;
+    return {
+      'path': files.last,
+      'tutor': meta['tutor'] as String? ?? '导师',
+      'lesson': meta['lesson'],
+    };
+  }
 
-    //无课次：自动创建第 1 课（lesson = 累计课时 + 1，tutor = 轮换起点）
+  //开启新课次：建档写 meta（按钮「开始上课」与首课共用；文件已存在则幂等返回既有）
+  //lesson = 累计课时 + 1，tutor = STATE.next_tutor（轮换推进在课后更新，此处只取）
+  Future<Map<String, dynamic>> startNewLesson(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
     final state = await loadCourseState(courseName);
     final now = DateTime.now();
     final date =
@@ -339,6 +341,17 @@ class StorageService {
       );
     }
     return {'path': path, 'tutor': tutor, 'lesson': lesson};
+  }
+
+  //读取最新课次 meta（上课控制按钮状态判定用；无课次返回 null，只读不建）
+  Future<Map<String, dynamic>?> loadLatestChatMeta(String courseName) async {
+    final files = await listChatFiles(courseName);
+    if (files.isEmpty) return null;
+    final lines = (await File(files.last).readAsLines())
+        .where((l) => l.trim().isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return null;
+    return jsonDecode(lines.first) as Map<String, dynamic>;
   }
 
   //追加一条消息到课次文件（先写后说；补齐末尾换行避免黏行）
@@ -448,6 +461,8 @@ class StorageService {
     }
   }
 
+  /* 上课动态（热力图数据，暂缓）：扫描全部课程 CHAT 文件的 meta.date 按日聚合计数。
+     文件模型改为「第N课.jsonl」后数据源需重新设计，恢复时取消注释。
   //上课动态：扫描全部课程 CHAT 文件的 meta.date，按日期聚合计数（热力图数据，现扫现算）
   Future<Map<String, int>> listLessonDates() async {
     final counts = <String, int>{};
@@ -470,6 +485,7 @@ class StorageService {
     }
     return counts;
   }
+  */
 
   //读取 CONFIG.json（不存在返回空 Map）
   Future<Map<String, dynamic>> loadConfig() async {

@@ -15,6 +15,7 @@ class CourseDetailPage extends StatefulWidget {
 
 class _CourseDetailPageState extends State<CourseDetailPage> {
   Map<String, dynamic> _state = {};
+  Map<String, dynamic>? _meta; //最新课次 meta（上课控制按钮状态判定；null=从未上课）
   List<Map<String, dynamic>> _progress = []; //知识点（新在前）
   final Set<int> _expanded = {}; //展开全部历史状态块的知识点索引
   bool _loading = true;
@@ -25,14 +26,16 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     _load();
   }
 
-  //读取 STATE 与 PROGRESS 并刷新
+  //读取 STATE、PROGRESS 与最新课次 meta 并刷新
   Future<void> _load() async {
     final state = await StorageService().loadCourseState(widget.courseName);
     final progress = await StorageService().loadCourseProgress(widget.courseName);
+    final meta = await StorageService().loadLatestChatMeta(widget.courseName);
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
       _state = state;
       _progress = progress;
+      _meta = meta;
       _loading = false;
     });
   }
@@ -40,7 +43,23 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('课程详情')),
+      appBar: AppBar(
+        title: const Text('课程详情'),
+        actions: [
+          //上课控制按钮：仅两态，随最新课次 meta.status 切换（文本路由取消，避免上课内容误触状态机）
+          //点击 pop 意图返回群聊页执行：start=开新课次建档，end=下课总结（待 LLM 接入）
+          TextButton(
+            onPressed: () => Navigator.pop(
+              context,
+              _meta?['status'] == 'ongoing' ? 'end' : 'start',
+            ),
+            child: Text(
+              _meta?['status'] == 'ongoing' ? '今天就到这里' : '开始上课',
+              style: const TextStyle(color: Color(0xFF07C160)),
+            ),
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(

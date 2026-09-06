@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/service/storage.dart';
 
-//设置页：上课动态热力图（仿 GitHub contribution graph）+ API 配置
+//设置页：API 配置（上课动态热力图暂缓，原因见类内注释块）
 class TabSetting extends StatefulWidget {
   const TabSetting({super.key});
 
@@ -10,11 +10,13 @@ class TabSetting extends StatefulWidget {
 }
 
 class _TabSettingState extends State<TabSetting> {
-  static const _cellSize = 12.0; //热力图格子边长
-  static const _cellGap = 3.0; //格子间距
-  static const _weekCount = 26; //展示的周数上限（半年，窄屏按宽度自适应减少）
+  //热力图暂缓：文件模型改为「第N课.jsonl」后，meta.date 语义弱化、用户消息自带
+  //时间戳，按日聚合的数据源需要重新设计；恢复时取消本类与 storage 内注释块
+  // static const _cellSize = 12.0; //热力图格子边长
+  // static const _cellGap = 3.0; //格子间距
+  // static const _weekCount = 26; //展示的周数上限（半年，窄屏按宽度自适应减少）
 
-  Map<String, int> _lessonDates = {}; //日期 → 课次数
+  // Map<String, int> _lessonDates = {}; //日期 → 课次数
   Map<String, dynamic> _config = {}; //CONFIG.json 内容
   bool _loading = true;
 
@@ -29,13 +31,11 @@ class _TabSettingState extends State<TabSetting> {
     super.dispose();
   }
 
-  //读取上课动态与配置，并刷新
+  //读取配置并刷新（热力图数据 listLessonDates 暂缓，见类顶注释）
   Future<void> _load() async {
-    final lessonDates = await StorageService().listLessonDates();
     final config = await StorageService().loadConfig();
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
-      _lessonDates = lessonDates;
       _config = config;
       _loading = false;
     });
@@ -58,7 +58,7 @@ class _TabSettingState extends State<TabSetting> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
-                _buildHeatmap(),
+                // _buildHeatmap(), //热力图暂缓
                 const SizedBox(height: 32),
                 const Center(
                   //与 pubspec version 同步（引入 package_info 前先硬编码）
@@ -72,6 +72,11 @@ class _TabSettingState extends State<TabSetting> {
     );
   }
 
+  /* ── 上课动态热力图（暂缓）─────────────────────────────
+     文件模型改为「第N课.jsonl」后，meta.date 语义弱化、用户消息自带
+     时间戳，按日聚合的数据源需要重新设计；恢复时取消注释。
+     ───────────────────────────────────────────────────*/
+  /*
   //热力图：统计行 + 月份标注 + 26 周网格（列=周，行=周一至周日）
   //不滚动：列数按可用宽度自适应（最多 26 周，窄屏自动减少）
   Widget _buildHeatmap() {
@@ -255,6 +260,7 @@ class _TabSettingState extends State<TabSetting> {
 
   static String _dateKey(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  */
 
   //API 配置对话框：三项输入保存至 CONFIG.json
   Future<void> _showApiConfigDialog() async {

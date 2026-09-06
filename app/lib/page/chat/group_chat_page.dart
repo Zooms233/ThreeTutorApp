@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:tutor_chat/page/chat/course_detail_page.dart';
 import 'package:tutor_chat/service/storage.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
@@ -257,8 +258,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
           IconButton(
             icon: const Icon(Icons.query_stats),
             tooltip: '课程详情',
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              //详情页上课控制按钮 pop 意图回传：start=开始上课 / end=今天就到这里 / null=普通返回
+              final action = await Navigator.push<String>(
                 context,
                 CupertinoPageRoute(
                   builder: (context) => CourseDetailPage(
@@ -266,6 +268,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   ),
                 ),
               );
+              if (action == null || !mounted) return;
+              if (action == 'start') {
+                //开启新课次建档（幂等）；LLM 问候生成待接入，挂点在此
+                await StorageService().startNewLesson(widget.courseName);
+                _load(); //重载消息流显示新课次分隔行
+              }
+              //action == 'end'：下课总结 + 课后更新待 LLM 链路接入，挂点在此
             },
           ),
         ],
@@ -322,20 +331,14 @@ class _GroupChatPageState extends State<GroupChatPage> {
   Widget _buildMessage(Map<String, dynamic> message) {
     final role = message['role'] as String? ?? 'tutor';
     final name = message['name'] as String? ?? '';
-    final content = _plainText(message['content'] as String? ?? '');
+    final content = message['content'] as String? ?? '';
 
     return role == 'user'
         ? _buildUserMessage(name, content)
         : _buildTutorMessage(name, content);
   }
 
-  //消息正文清洗：去斜体/加粗星号与标题#号；公式原样保留（待渲染包接入）
-  static String _plainText(String text) {
-    return text
-        .replaceAll(RegExp(r'\*+'), '')
-        .replaceAll(RegExp(r'^#+\s*', multiLine: true), '')
-        .trim();
-  }
+  //消息正文用 GptMarkdown 渲染：支持斜体旁白（*...*）、标题、列表与 LaTeX 公式（$...$ 行内、$$...$$ 独立行）
 
   //导师消息：头像 + 名字 + 白色气泡，左对齐；气泡最大宽度约屏宽 72%
   Widget _buildTutorMessage(String name, String content) {
@@ -375,9 +378,17 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     bottomRight: Radius.circular(12),
                   ),
                 ),
-                child: Text(
+                child: GptMarkdown(
                   content,
                   style: const TextStyle(fontSize: 15, height: 1.4),
+                  useDollarSignsForLatex: true, //$...$ 与 $$...$$ 定界的 LaTeX 需显式开启（默认只认 \(...\)/\[...\]）
+                  //行内公式与正文同字号；块公式超宽时横向滚动，避免溢出气泡
+                  styleSheet: const GptMarkdownStyleSheet(
+                    latex: LatexStyle(
+                      textStyle: TextStyle(fontSize: 15),
+                      scrollBlockHorizontally: true,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -412,9 +423,16 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   bottomRight: Radius.circular(4), //靠头像侧小圆角（微信细节）
                 ),
               ),
-              child: Text(
+              child: GptMarkdown(
                 content,
                 style: const TextStyle(fontSize: 15, height: 1.4),
+                useDollarSignsForLatex: true,
+                styleSheet: const GptMarkdownStyleSheet(
+                  latex: LatexStyle(
+                    textStyle: TextStyle(fontSize: 15),
+                    scrollBlockHorizontally: true,
+                  ),
+                ),
               ),
             ),
           ),
