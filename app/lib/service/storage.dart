@@ -69,6 +69,7 @@ class StorageService {
       result.add({
         'file': file.path.split(Platform.pathSeparator).last, //文件名，点击导师时据此读取档案
         'name': data['name'],
+        'dir': worldDir.path, //世界目录路径（头像图片查找用）
       });
     }
     return result;
@@ -189,6 +190,300 @@ class StorageService {
       await File(textbookPath).copy('${textbookDir.path}/$name');
     }
     return null;
+  }
+
+  //会话列表数据：每课程一行（群名/日期/预览）
+  //预览 = 最新 CHAT 文件最后一条消息；无 CHAT 则预览"尚未开始上课"且垫底排序
+  Future<List<Map<String, dynamic>>> listConversations() async {
+    final result = <Map<String, dynamic>>[];
+
+    for (final course in await listCourses()) {
+      final chatDir = Directory('${(await getCourseDir(course)).path}/CHAT');
+
+      //找最新课次文件：文件名含日期与课次，字典序即时间序，取最后一个
+      final files = <File>[];
+      if (chatDir.existsSync()) {
+        for (final entity in chatDir.listSync()) {
+          if (entity is File && entity.path.endsWith('.jsonl')) {
+            files.add(entity);
+          }
+        }
+        files.sort((a, b) => a.path.compareTo(b.path));
+      }
+
+      if (files.isEmpty) {
+        result.add({
+          'name': course,
+          'date': '',
+          'preview': '尚未开始上课',
+        });
+        continue;
+      }
+
+      //读取首行 meta 与最后一条 message（从后往前找，跳过其他行型）
+      final lines = (await files.last
+              .readAsString())
+          .split('\n')
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      final meta = jsonDecode(lines.first) as Map<String, dynamic>;
+      Map<String, dynamic>? lastMessage;
+      for (var i = lines.length - 1; i >= 0; i--) {
+        final row = jsonDecode(lines[i]) as Map<String, dynamic>;
+        if (row['type'] == 'message') {
+          lastMessage = row;
+          break;
+        }
+      }
+
+      //微信式预览：他人消息带发言人名，自己消息不带
+      final isUser = lastMessage?['role'] == 'user';
+      final sender = isUser ? '' : '${lastMessage?['name'] ?? ''}: ';
+      final preview = stripMarkdown(lastMessage?['content'] as String? ?? '');
+      result.add({
+        'name': course,
+        'date': meta['date'] as String? ?? '',
+        'preview': '$sender$preview',
+      });
+    }
+
+    //排序：有消息的按日期倒序，无消息垫底（按名称）
+    result.sort((a, b) {
+      final da = a['date'] as String;
+      final db = b['date'] as String;
+      if (da.isEmpty && db.isEmpty) return 0;
+      if (da.isEmpty) return 1;
+      if (db.isEmpty) return -1;
+      return db.compareTo(da);
+    });
+    return result;
+  }
+
+  //剥离 Markdown/LaTeX 标记（会话预览用，不影响消息正文渲染）
+  //公式 $...$ 替换为【公式】提示；斜体/加粗星号与标题#符号去除；换行压平
+  static String stripMarkdown(String text) {
+    return text
+        .replaceAll(RegExp(r'\$\$?[^$]*\$\$?'), '【公式】')
+        .replaceAll(RegExp(r'\*+'), '')
+        .replaceAll(RegExp(r'^#+\s*', multiLine: true), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  //列出课程全部课次文件路径（旧 → 新排序）：只查文件名单，不读内容（按需加载用）
+  Future<List<String>> listChatFiles(String courseName) async {
+    final chatDir = Directory('${(await getCourseDir(courseName)).path}/CHAT');
+    final files = <String>[];
+    if (chatDir.existsSync()) {
+      for (final entity in chatDir.listSync()) {
+        if (entity is File && entity.path.endsWith('.jsonl')) {
+          files.add(entity.path);
+        }
+      }
+      files.sort(); //文件名含日期与课次，字典序即时间序
+    }
+    return files;
+  }
+
+  //读取单个课次文件的条目（兼容旧数据：message 缺 phase 默认按上课消息处理）
+  Future<List<Map<String, dynamic>>> loadChatFile(String path) async {
+    final entries = <Map<String, dynamic>>[];
+    for (final line in await File(path).readAsLines()) {
+      if (line.trim().isEmpty) continue;
+      final row = jsonDecode(line) as Map<String, dynamic>;
+      if (row['type'] == 'message' && row['phase'] == null) {
+        row['phase'] = 'teaching';
+      }
+      entries.add(row);
+    }
+    return entries;
+  }
+
+  //当前会话目标：最新课次文件路径 + 本课授课导师；无课次时按 STATE 自动开第 1 课
+  Future<Map<String, dynamic>> getCurrentLesson(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final files = await listChatFiles(courseName);
+
+    if (files.isNotEmpty) {
+      //最新课次：读 meta 拿导师与课次号
+      final lines = (await File(files.last).readAsLines())
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      final meta = jsonDecode(lines.first) as Map<String, dynamic>;
+      return {
+        'path': files.last,
+        'tutor': meta['tutor'] as String? ?? '导师',
+        'lesson': meta['lesson'],
+      };
+    }
+
+    //无课次：自动创建第 1 课（lesson = 累计课时 + 1，tutor = 轮换起点）
+    final state = await loadCourseState(courseName);
+    final now = DateTime.now();
+    final date =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final lesson = (state['lessons'] as int? ?? 0) + 1;
+    final tutor = state['next_tutor'] as String? ?? '导师';
+    final path = '${courseDir.path}/CHAT/$date-第$lesson课.jsonl';
+
+    await Directory('${courseDir.path}/CHAT').create(recursive: true);
+    if (!File(path).existsSync()) {
+      await File(path).writeAsString(
+        '${jsonEncode({
+          'type': 'meta',
+          'lesson': lesson,
+          'date': date,
+          'tutor': tutor,
+          'status': 'ongoing',
+        })}\n',
+      );
+    }
+    return {'path': path, 'tutor': tutor, 'lesson': lesson};
+  }
+
+  //追加一条消息到课次文件（先写后说；补齐末尾换行避免黏行）
+  Future<void> appendChatMessage(
+    String path,
+    Map<String, dynamic> message,
+  ) async {
+    final file = File(path);
+    final existing = await file.readAsString();
+    final separator = existing.isEmpty || existing.endsWith('\n') ? '' : '\n';
+    await file.writeAsString(
+      '$existing$separator${jsonEncode(message)}\n',
+    );
+  }
+
+  //课程内导师名 → 档案文件名映射（消息头像按名查找对应图片）
+  Future<Map<String, String>> loadCourseTutorFiles(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final map = <String, String>{};
+    for (final entity in courseDir.listSync()) {
+      final fileName = entity.path.split(Platform.pathSeparator).last;
+      if (entity is File &&
+          fileName.startsWith('tutor_') &&
+          fileName.endsWith('.json')) {
+        final data = jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
+        map[data['name'] as String? ?? ''] = fileName;
+      }
+    }
+    return map;
+  }
+
+  //读取课程学习者档案（LEARNER.json；文件不存在返回空 Map）
+  Future<Map<String, dynamic>> loadCourseLearner(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final file = File('${courseDir.path}/LEARNER.json');
+    if (!file.existsSync()) return {};
+    return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  }
+
+  //读取课程内导师与学习者的关系（tutor_*.json 的 name + relation，按文件名 tutor_a→b→c）
+  Future<List<Map<String, dynamic>>> loadCourseTutorRelations(
+    String courseName,
+  ) async {
+    final courseDir = await getCourseDir(courseName);
+    final tutors = <Map<String, dynamic>>[];
+
+    final files = <File>[];
+    for (final entity in courseDir.listSync()) {
+      final fileName = entity.path.split(Platform.pathSeparator).last;
+      if (entity is File &&
+          fileName.startsWith('tutor_') &&
+          fileName.endsWith('.json')) {
+        files.add(entity);
+      }
+    }
+    files.sort((a, b) => a.path.compareTo(b.path));
+
+    for (final file in files) {
+      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      tutors.add({'name': data['name'], 'relation': data['relation']});
+    }
+    return tutors;
+  }
+
+  //读取课程 STATE.json（单行 JSON；文件不存在返回空 Map）
+  Future<Map<String, dynamic>> loadCourseState(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final file = File('${courseDir.path}/STATE.json');
+    if (!file.existsSync()) return {};
+    return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  }
+
+  //读取课程 PROGRESS.jsonl（每行一个知识点；展示时新知识点在前）
+  Future<List<Map<String, dynamic>>> loadCourseProgress(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final file = File('${courseDir.path}/PROGRESS.jsonl');
+    if (!file.existsSync()) return [];
+
+    final result = <Map<String, dynamic>>[];
+    for (final line in await file.readAsLines()) {
+      if (line.trim().isEmpty) continue;
+      result.add(jsonDecode(line) as Map<String, dynamic>);
+    }
+    return result.reversed.toList();
+  }
+
+  //重命名课程（群名 = 课程名 = 课程目录名）
+  //返回 null=成功；返回字符串=失败原因
+  Future<String?> renameCourse(String oldName, String newName) async {
+    if (newName == oldName) return null;
+    if (RegExp(r'[\\/:*?"<>|]').hasMatch(newName)) {
+      return '包含不能用于文件夹名的字符';
+    }
+    final newDir = await getCourseDir(newName);
+    if (newDir.existsSync()) return '同名课程已存在';
+    final oldDir = await getCourseDir(oldName);
+    if (!oldDir.existsSync()) return '课程不存在';
+    await oldDir.rename(newDir.path);
+    return null;
+  }
+
+  //删除课程：删除整个课程目录（含 CHAT/STATE/PROGRESS/档案副本）
+  Future<void> deleteCourse(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    if (courseDir.existsSync()) {
+      await courseDir.delete(recursive: true);
+    }
+  }
+
+  //上课动态：扫描全部课程 CHAT 文件的 meta.date，按日期聚合计数（热力图数据，现扫现算）
+  Future<Map<String, int>> listLessonDates() async {
+    final counts = <String, int>{};
+
+    for (final course in await listCourses()) {
+      final chatDir = Directory('${(await getCourseDir(course)).path}/CHAT');
+      if (!chatDir.existsSync()) continue;
+      for (final entity in chatDir.listSync()) {
+        if (entity is! File || !entity.path.endsWith('.jsonl')) continue;
+        final lines = (await entity.readAsLines())
+            .where((l) => l.trim().isNotEmpty)
+            .toList();
+        if (lines.isEmpty) continue;
+        final meta = jsonDecode(lines.first) as Map<String, dynamic>;
+        final date = meta['date'] as String?;
+        if (date != null && date.isNotEmpty) {
+          counts[date] = (counts[date] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  }
+
+  //读取 CONFIG.json（不存在返回空 Map）
+  Future<Map<String, dynamic>> loadConfig() async {
+    final root = await getRootDir();
+    final file = File('${root.path}/CONFIG.json');
+    if (!file.existsSync()) return {};
+    return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+  }
+
+  //保存 CONFIG.json（整写，保留调用方传入的全部字段）
+  Future<void> saveConfig(Map<String, dynamic> config) async {
+    final root = await getRootDir();
+    final file = File('${root.path}/CONFIG.json');
+    await file.writeAsString(jsonEncode(config));
   }
 
   //导入单个内置世界：从 assets/worlds/<name>/ 复制档案到应用目录

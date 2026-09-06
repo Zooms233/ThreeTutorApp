@@ -29,9 +29,23 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
 
   //选择教材文件：Windows 弹资源管理器，Android 走系统选择器（SAF）
   Future<void> _pickTextbook() async {
-    final file = await openFile();
+    final XFile? file;
+    try {
+      file = await openFile();
+    } catch (e) {
+      //选择器不可用：多半是新加的原生插件未注册（加依赖后需完全重启应用）
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('文件选择器不可用：$e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     if (file == null) return; //用户取消选择
-    setState(() => _textbookPath = file.path);
+    final path = file.path; //先取出路径（闭包内无法使用可空变量的类型提升）
+    setState(() => _textbookPath = path);
   }
 
   //提交建课；成功后返回资料页（群聊页实现前的过渡）

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/contact/tutor_intro_page.dart';
 import 'package:tutor_chat/service/storage.dart';
+import 'package:tutor_chat/widget/tutor_avatar.dart';
 
 class TabContact extends StatefulWidget {
   const TabContact({super.key});
@@ -188,16 +189,21 @@ class _TabContactState extends State<TabContact> {
     );
   }
 
-  //导师行：白底 + 底部分隔线（从文字缩进处开始，微信样式），点击进入导师档案详情页
-  //左缩进 32（分组标题 16），与标题错开形成层级感（微信通讯录的做法：标题贴左、条目右移）
-  //用 Material 包裹：白底是水波纹的载体，按压时有反馈
+  //导师行：头像 + 导师名，点击进入导师资料页
+  //头像自然把名字推到右侧，与贴左的分组标题形成层级（无需额外缩进）
+  //分割线从头像右侧起（16+40+16=72），微信样式
   Widget _buildTutorRow(String world, Map<String, dynamic> tutor) {
     return Material(
       color: Colors.white,
       child: Column(
         children: [
           ListTile(
-            contentPadding: const EdgeInsets.fromLTRB(32, 0, 16, 0),
+            leading: TutorAvatar(
+              name: tutor['name'] as String,
+              size: 40,
+              imageDir: tutor['dir'] as String?,
+              fileName: tutor['file'] as String?,
+            ),
             title: Text(tutor['name'] as String),
             onTap: () {
               Navigator.push(
@@ -211,7 +217,7 @@ class _TabContactState extends State<TabContact> {
               );
             },
           ),
-          const Divider(height: 1, indent: 32), //颜色与粗细继承全局 dividerTheme
+          const Divider(height: 1, indent: 72), //颜色与粗细继承全局 dividerTheme
         ],
       ),
     );

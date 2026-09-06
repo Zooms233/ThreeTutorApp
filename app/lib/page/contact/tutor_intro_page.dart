@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/contact/create_course_page.dart';
+import 'package:tutor_chat/widget/tutor_avatar.dart';
 import 'package:tutor_chat/page/contact/tutor_profile_page.dart';
 import 'package:tutor_chat/service/storage.dart';
 
@@ -20,6 +21,7 @@ class TutorIntroPage extends StatefulWidget {
 
 class _TutorIntroPageState extends State<TutorIntroPage> {
   Map<String, dynamic>? _profile; //导师档案（名字与身份）
+  String? _imageDir; //世界目录路径（头像图片查找用）
   bool _loading = true;
   List<String> _courses = []; //该导师参与的课程名单
   bool _coursesLoading = true;
@@ -31,15 +33,17 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
     _loadCourses();
   }
 
-  //读取导师档案并刷新界面
+  //读取导师档案并刷新界面（同时记下世界目录路径供头像查找图片）
   Future<void> _loadProfile() async {
     final profile = await StorageService().loadTutorProfile(
       widget.worldName,
       widget.fileName,
     );
+    final worldDir = await StorageService().getWorldDir(widget.worldName);
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
       _profile = profile;
+      _imageDir = worldDir.path;
       _loading = false;
     });
   }
@@ -76,24 +80,44 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
 
     return ListView(
       children: [
-        //头部：白底块，导师名大字居中 + 身份小字灰色居中
+        //头部：白底块，头像左 + 名字/身份右（微信联系人样式）
         Container(
           width: double.infinity,
           color: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 32),
-          child: Column(
+          padding: const EdgeInsets.all(16),
+          child: Row(
             children: [
-              Text(
-                name,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600),
+              TutorAvatar(
+                name: name,
+                size: 64,
+                imageDir: _imageDir,
+                fileName: widget.fileName,
               ),
-              if (identity.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  identity,
-                  style: const TextStyle(fontSize: 13, color: Color(0xFF999999)),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (identity.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        identity,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF999999),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
+              ),
             ],
           ),
         ),
