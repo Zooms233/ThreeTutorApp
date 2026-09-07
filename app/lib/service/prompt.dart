@@ -185,6 +185,7 @@ class PromptBuilder {
   // —— CHAT 历史映射 ——
 
   //meta 行不映射；user→user（time 并入头部）、tutor→assistant，原文原样；连续 user 合并（\n）
+  //message 行映射：meta 不映射（其余字段如 auto 标记渲染/映射均忽略）
   Future<List<PromptMessage>> _mapHistory(String chatPath) async {
     final file = File(chatPath);
     if (!file.existsSync()) return [];
@@ -258,6 +259,7 @@ class PromptBuilder {
   }
 
   ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教材；不注入状态与日期。
+  ///写入目标为下一课文件（新开课区间的交流段），群聊总在上一课文件尾，历史天然不含群聊。
   Future<List<Map<String, String>>> qa({
     required String courseDir,
     required String chatPath,
@@ -280,6 +282,7 @@ class PromptBuilder {
   }
 
   ///聊天（idle + toggle 激活）：聊天规则 + 三位导师档案；不注入状态、日期与教材。
+  ///chatPath 由调用方指向群聊讨论的落档文件（本课文件尾，含教学全程与群聊），历史即该文件全量。
   Future<List<Map<String, String>>> social({
     required String courseDir,
     required String chatPath,

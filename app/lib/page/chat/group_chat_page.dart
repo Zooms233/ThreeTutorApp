@@ -5,12 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:tutor_chat/page/chat/course_detail_page.dart';
+import 'package:tutor_chat/service/llm_client.dart' show LlmException;
 import 'package:tutor_chat/service/storage.dart';
+import 'package:tutor_chat/service/tutorchat_service.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
 //按需加载：优先渲染最近课次，上滑到顶加载更早课次（微信行为）
-//本阶段为只读壳子：输入框禁用；收发与 ⋮ 菜单待实现
+//收发接线：judgeFlow 判定三态 → 对应服务方法；生成期间 Banner 替换为「正在输入中」并锁定输入框
 class GroupChatPage extends StatefulWidget {
   const GroupChatPage({super.key, required this.courseName});
 
@@ -18,6 +20,22 @@ class GroupChatPage extends StatefulWidget {
 
   @override
   State<GroupChatPage> createState() => _GroupChatPageState();
+}
+
+//下划线斜体规范化：_文字_ → *文字*（gpt_markdown 的 ItalicMd 只认星号斜体，不认下划线）
+//开/闭下划线不贴 ASCII 字母数字（保护 file_name 类英文词内下划线与数字下标），内容首尾非空白
+final RegExp _underscoreItalic = RegExp(
+  r'(?<![A-Za-z0-9])_(?!_)([^_\s](?:[^_\n]*[^_\s])?)_(?![A-Za-z0-9_])',
+);
+
+//渲染前调用：把非 LaTeX 区间的 _文字_ 转为 *文字*；公式段原样保留（_ 是 LaTeX 下标语法）
+String _normalizeItalic(String text) {
+  return text.splitMapJoin(
+    RegExp(r'\$\$?[^$]*\$\$?'),
+    onMatch: (m) => m.group(0)!,
+    onNonMatch: (t) =>
+        t.replaceAllMapped(_underscoreItalic, (m) => '*${m[1]}*'),
+  );
 }
 
 //消息流渲染单元：系统分隔行或消息行
@@ -46,47 +64,101 @@ class _GroupChatPageState extends State<GroupChatPage> {
   Map<String, String> _tutorFiles = {}; //导师名 → 档案文件名（头像图片查找用）
   String _courseDirPath = ''; //课程目录路径（头像图片查找用）
   String _learnerName = ''; //用户称呼（用户消息显示与写档用）
-  String _currentTutor = ''; //当前课次授课导师（模拟回复与「正在输入中」用）
-  bool _sending = false; //模拟回复进行中（Banner 提示 + 输入框暂锁）
+  String _busyLabel = ''; //生成中 Banner 文案（「<导师名> 正在输入中…」）；空 = 空闲
+  String _latestStatus = ''; //最新课次 meta.status（toggle 显示判定；''=无课次）
+  int _lessons = 0; //累计课时（toggle 显示判定：idle 且 ≥1）
+  bool _socialMode = false; //课后交流切换：false=问答（默认）/ true=群聊讨论；仅会话内存不落盘
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
+  final _inputFocus = FocusNode(); //输入框焦点（快捷键判定 + 发送后焦点回位）
+  final _service = TutorChatService(); //编排层：三态判定 + 各场景收发与上下课
+
+  bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
 
   @override
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
     _scrollController.addListener(_onScroll); //滑到顶部附近时加载更早课次
+    HardwareKeyboard.instance.addHandler(_onKey); //桌面端 Ctrl+Enter 发送（全局钩子）
+    _service.busyVersion.addListener(_onBusyChanged); //跨页面生成中状态同步
     _load();
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey); //释放全局键盘钩子
+    _service.busyVersion.removeListener(_onBusyChanged); //移除生成中状态监听
     _scrollController.dispose(); //页面销毁时释放滚动控制器
     _inputController.dispose(); //释放输入控制器，避免内存泄漏
+    _inputFocus.dispose(); //释放焦点节点
     super.dispose();
   }
 
-  //初始加载：最近课次优先；内容不足一屏时继续向前补足
-  //（否则内容顶死在顶部，上滑不会产生滚动事件，更早课次将永远无法触发加载）
+  //桌面端快捷键（全局键盘钩子，不挂在 TextField 事件流上）：
+  //Ctrl+Enter 发送；Enter 换行由 TextField 原生处理。
+  //不在 TextField 外套 Focus.onKeyEvent 的原因：Windows 中文输入法下，
+  //在 TextField 事件流上干预按键会破坏 IME 组合状态，导致删除键间歇性失效。
+  //跨页面生成中状态同步：服务端设置/清除 busy 时立即更新 Banner（含退出重进后的恢复）。
+  //busy → 空闲时从文件重载：生成可能发生在本页面之外（如后台群聊），落档内容需拉回屏上。
+  void _onBusyChanged() {
+    if (!mounted) return;
+    final wasBusy = _busy;
+    final label = _service.busyLabelOf(widget.courseName);
+    if (label != _busyLabel) setState(() => _busyLabel = label);
+    if (wasBusy && label.isEmpty) _reload();
+  }
+
+  bool _onKey(KeyEvent event) {
+    if (!_isDesktop) return false;
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.enter &&
+        HardwareKeyboard.instance.isControlPressed &&
+        _inputFocus.hasFocus &&
+        _inputController.text.trim().isNotEmpty &&
+        !_busy) {
+      _sendMessage();
+      return true; //吞掉按键，避免插入换行
+    }
+    return false; //其余全部放行（含 Backspace）
+  }
+
+  //初始加载：转圈后走同一套加载逻辑
   Future<void> _load() async {
+    setState(() => _loading = true);
+    await _reload();
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  //从文件重建消息流（不清空页面、不转圈）：生成完成后同步落档结果
+  //同时刷新 toggle 显示所需的 meta.status 与 STATE.lessons
+  Future<void> _reload() async {
     final files = await StorageService().listChatFiles(widget.courseName);
     final tutorFiles = await StorageService().loadCourseTutorFiles(
       widget.courseName,
     );
     final courseDir = await StorageService().getCourseDir(widget.courseName);
     final learner = await StorageService().loadCourseLearner(widget.courseName);
+    final meta = await StorageService().loadLatestChatMeta(widget.courseName);
+    final state = await StorageService().loadCourseState(widget.courseName);
 
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
 
-    //从未上课：只显示加入群聊的系统行（此后不存在空白消息页）
+    //恢复跨页面生成中状态：退出再进入仍显示「正在输入中」并锁输入（生成在后台继续）
+    final busyLabel = _service.busyLabelOf(widget.courseName);
+    if (busyLabel != _busyLabel) setState(() => _busyLabel = busyLabel);
+
+    //从未上课：只显示加入群聊的系统行（此后不存在空白消息页，_buildItems 空条目即此行）
     if (files.isEmpty) {
       setState(() {
         _files = files;
         _tutorFiles = tutorFiles;
         _courseDirPath = courseDir.path;
         _learnerName = learner['name'] as String? ?? '我';
+        _latestStatus = '';
+        _lessons = state['lessons'] as int? ?? 0;
         _items = [const _ChatItem.divider('你加入了群聊，现在可以开始聊天了')];
-        _loading = false;
       });
       return;
     }
@@ -115,8 +187,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _tutorFiles = tutorFiles;
       _courseDirPath = courseDir.path;
       _learnerName = learner['name'] as String? ?? '我';
+      _latestStatus = meta?['status'] as String? ?? '';
+      _lessons = state['lessons'] as int? ?? 0;
       _items = _buildItems(entries, hasMore: _hasMore).reversed.toList();
-      _loading = false;
     });
   }
 
@@ -147,53 +220,175 @@ class _GroupChatPageState extends State<GroupChatPage> {
     }
   }
 
-  //发送消息并生成模拟回复（后续替换为 LLM 调用，写入与 UI 逻辑不变）
-  //写入规则：追加到最新课次文件（无课次时自动开第 1 课）；不做「开始上课」状态机触发
+  //发送消息：judgeFlow 判定三态 → 走对应服务方法（先写后说由服务层完成）
+  //失败时用户消息已留档（悬空），输入框解锁，重发时连续合并消化
   Future<void> _sendMessage() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty || _sending) return;
+    if (text.isEmpty || _busy) return;
     _inputController.clear();
+    //不主动回焦：requestFocus 会重置 IME 连接，Windows 中文输入法下
+    //Backspace 会被僵死的组合态吞掉（退格删不了字、选中替换却可以的疑似成因）；
+    //点击发送按钮若焦点被按钮拿走，点一下输入框即恢复。
 
-    //定位当前课次（无课次时自动创建第 1 课 meta，tutor 取 STATE 的 next_tutor）
+    //三态判定：idle+未上过课 → 问答；idle+toggle 激活 → 群聊讨论；ongoing → 上课对话
+    final flow = await _service.judgeFlow(
+      widget.courseName,
+      toggleActive: _socialMode,
+    );
     final lesson = await StorageService().getCurrentLesson(widget.courseName);
-    final filePath = lesson['path'] as String;
     final tutorName = lesson['tutor'] as String;
+    final social = flow == 'social';
+    final phase = social ? 'social' : (flow == 'teaching' ? 'teaching' : 'qa');
 
-    //写入用户消息（先写后说）
+    //乐观上屏：用户消息先显示（服务层此刻正把它写入文件，不重复落档）
     final userMessage = {
       'type': 'message',
-      'phase': 'teaching',
+      'phase': phase,
       'role': 'user',
       'name': _learnerName,
+      'time': _now(),
       'content': text,
     };
-    await StorageService().appendChatMessage(filePath, userMessage);
     if (!mounted) return;
     setState(() {
-      _currentTutor = tutorName;
-      _sending = true; //模拟回复生成中
       _entries = [..._entries, userMessage];
       _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+      //Banner：问答/上课回应者确定（本课导师=next_tutor）；群聊讨论由话题选人，用通用文案（与 service 端一致，随 busy 同步覆盖）
+      _busyLabel = social ? '群里正在输入中…' : '$tutorName 正在输入中…';
     });
     _scrollToBottom();
 
-    //模拟回复：「嗯，」+ 用户输入；本地短暂延迟模拟生成耗时
-    final reply = {
-      'type': 'message',
-      'phase': 'teaching',
-      'role': 'tutor',
-      'name': tutorName,
-      'content': '嗯，$text',
-    };
-    await Future.delayed(const Duration(milliseconds: 500));
-    await StorageService().appendChatMessage(filePath, reply);
+    try {
+      await (flow == 'teaching'
+          ? _service.sendLessonMessage(
+              courseName: widget.courseName,
+              content: text,
+            )
+          : _service.sendUserMessage(
+              courseName: widget.courseName,
+              content: text,
+              social: social,
+            ));
+    } on LlmException catch (e) {
+      if (!mounted) return;
+      setState(() => _busyLabel = '');
+      _toast('发送失败：$e\n消息已保留，重新发送即可');
+    }
+    //无论成败都从文件重载：成功同步回复；失败同步悬空消息（含课次分隔行）；再解锁输入框
     if (!mounted) return;
-    setState(() {
-      _sending = false;
-      _entries = [..._entries, reply];
-      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
-    });
+    setState(() => _busyLabel = '');
+    await _reload();
     _scrollToBottom();
+  }
+
+  //课程详情页按钮 pop 意图处理：start=开始上课（问候）/ end=今天就到这里（总结+课后更新）
+  Future<void> _handleLessonAction(String action) async {
+    if (_busy) {
+      _toast('上一条生成还未完成，请稍候');
+      return;
+    }
+
+    if (action == 'start') {
+      //开启新课次建档（幂等，文件已存在则返回既有），随后生成课前问候
+      final lesson = await StorageService().startNewLesson(widget.courseName);
+      if (!mounted) return;
+      setState(() => _busyLabel = '${lesson['tutor']} 正在输入中…');
+      try {
+        await _service.startLesson(courseName: widget.courseName);
+      } on LlmException catch (e) {
+        //问候失败：meta 保持 ongoing，用户直接发消息即走上课对话自然恢复
+        if (!mounted) return;
+        _toast('问候生成失败：$e\n可直接发消息继续上课');
+      }
+    } else {
+      //action == 'end'：下课总结 → 课后更新 → 群聊生成（三段请求，全程锁定输入框）
+      final lesson = await StorageService().getCurrentLesson(widget.courseName);
+      if (!mounted) return;
+      setState(() => _busyLabel = '${lesson['tutor']} 正在输入中…');
+      try {
+        await _service.endLesson(
+          courseName: widget.courseName,
+          //逐条落档即回调：总结先上屏（teaching），群聊消息逐条弹出（social）
+          onMessage: (message) {
+            if (!mounted) return;
+            setState(() {
+              _entries = [..._entries, message];
+              _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+              //群聊是三位导师轮流发言，Banner 改为群聊中；总结阶段保持本课导师名
+              if (message['phase'] == 'social') _busyLabel = '群里正在输入中…';
+            });
+            _scrollToBottom();
+          },
+        );
+        //成功：下一课文件已建（含群聊消息），lessons ≥ 1，toggle 开始显示
+        if (!mounted) return;
+        _toast('今天到这里，好好休息～');
+      } on LlmException catch (e) {
+        //总结或更新失败：meta 保持 ongoing，按钮仍为「今天就到这里」，重新点击即重跑
+        if (!mounted) return;
+        _toast('下课总结失败：$e\n可重新点击「今天就到这里」重试');
+      }
+    }
+    if (!mounted) return;
+    setState(() => _busyLabel = '');
+    await _reload();
+    _scrollToBottom();
+  }
+
+  //轻提示（SnackBar，不阻断操作）
+  void _toast(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+    );
+  }
+
+  //当前时刻（用户消息 time 字段，乐观上屏用；落档以服务层写入为准）
+  String _now() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${n.year}-${two(n.month)}-${two(n.day)} ${two(n.hour)}:${two(n.minute)}';
+  }
+
+  //按用户消息时间戳做块级稳定排序（渲染序）。
+  //键 = user 自身 time；tutor 继承其前最近 user（回复随后渲染）；meta 锚定其文件内首条 user（分隔行贴住本课内容）。
+  //同键保持原序（稳定）：文件内行序本就是时间序，排序只在跨文件交界处（qa 在下一课文件头、
+  //讨论在上一课文件尾交错）生效，不影响正常顺序。
+  List<Map<String, dynamic>> _sortByTimestamp(List<Map<String, dynamic>> entries) {
+    final keys = List<String>.filled(entries.length, '');
+    var last = ''; //向前最近 user 的 time（tutor 继承源）
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      if (e['type'] != 'message') continue; //meta 第二遍处理
+      if (e['role'] == 'user') last = e['time'] as String? ?? last;
+      keys[i] = last;
+    }
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i]['type'] == 'meta') {
+        //meta 锚定其文件内首条 user time；整文件无 user（纯教学文件）时继承上一文件尾的键
+        var k = '';
+        for (
+          var j = i + 1;
+          j < entries.length && entries[j]['type'] != 'meta';
+          j++
+        ) {
+          final e = entries[j];
+          if (e['type'] == 'message' && e['role'] == 'user') {
+            k = e['time'] as String? ?? '';
+            break;
+          }
+        }
+        keys[i] = k.isNotEmpty ? k : (i > 0 ? keys[i - 1] : '');
+      }
+    }
+    final order = [for (var i = 0; i < entries.length; i++) i]
+      ..sort((a, b) {
+        final ka = keys[a], kb = keys[b];
+        if (ka == kb) return a.compareTo(b); //同键稳定：保持物理行序
+        if (ka.isEmpty) return -1; //无锚点（极边界）排最前
+        if (kb.isEmpty) return 1;
+        return ka.compareTo(kb); //time 字典序即时间序（YYYY-MM-DD HH:mm）
+      });
+    return [for (final i in order) entries[i]];
   }
 
   //滚动到最底部（最新消息；reverse 列表的 offset 0 即底部）
@@ -205,9 +400,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   //把消息流条目转成渲染单元（插入课次分隔行与「下课后」分隔行）
   List<_ChatItem> _buildItems(
-    List<Map<String, dynamic>> entries, {
+    List<Map<String, dynamic>> rawEntries, {
     required bool hasMore,
   }) {
+    //先按时间戳归序：qa 写下一课文件头、讨论写上一课文件尾交错使用时，修正渲染时序
+    final entries = _sortByTimestamp(rawEntries);
     final items = <_ChatItem>[];
 
     //更早课次已全部加载：顶部提示没有更多
@@ -249,12 +446,22 @@ class _GroupChatPageState extends State<GroupChatPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          //模拟回复生成期间显示「正在输入中」（后续接入 LLM 沿用同一逻辑）
-          _sending && _currentTutor.isNotEmpty
-              ? '$_currentTutor 正在输入中…'
-              : widget.courseName,
+          //LLM 生成期间群名替换为「<导师名> 正在输入中…」，完成恢复群名
+          _busy ? _busyLabel : widget.courseName,
         ),
         actions: [
+          //课后交流切换：仅 idle 且上过课（lessons ≥ 1）显示；默认问答，激活为群聊讨论
+          if (_latestStatus == 'idle' && _lessons >= 1)
+            IconButton(
+              icon: const Icon(Icons.groups, size: 24),
+              tooltip: _socialMode
+                  ? '课后交流：群聊讨论（点此切回问答）'
+                  : '课后交流：问答（点此切为群聊讨论）',
+              color: _socialMode
+                  ? const Color(0xFF07C160)
+                  : const Color(0xFF999999),
+              onPressed: () => setState(() => _socialMode = !_socialMode),
+            ),
           IconButton(
             icon: const Icon(Icons.query_stats),
             tooltip: '课程详情',
@@ -269,12 +476,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 ),
               );
               if (action == null || !mounted) return;
-              if (action == 'start') {
-                //开启新课次建档（幂等）；LLM 问候生成待接入，挂点在此
-                await StorageService().startNewLesson(widget.courseName);
-                _load(); //重载消息流显示新课次分隔行
-              }
-              //action == 'end'：下课总结 + 课后更新待 LLM 链路接入，挂点在此
+              await _handleLessonAction(action);
             },
           ),
         ],
@@ -338,7 +540,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
         : _buildTutorMessage(name, content);
   }
 
-  //消息正文用 GptMarkdown 渲染：支持斜体旁白（*...*）、标题、列表与 LaTeX 公式（$...$ 行内、$$...$$ 独立行）
+  //消息正文用 GptMarkdown 渲染：支持斜体旁白（*...* 与 _..._，后者渲染前规范化为前者）、标题、列表与 LaTeX 公式（$...$ 行内、$$...$$ 独立行）
 
   //导师消息：头像 + 名字 + 白色气泡，左对齐；气泡最大宽度约屏宽 72%
   Widget _buildTutorMessage(String name, String content) {
@@ -379,7 +581,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   ),
                 ),
                 child: GptMarkdown(
-                  content,
+                  _normalizeItalic(content),
                   style: const TextStyle(fontSize: 15, height: 1.4),
                   useDollarSignsForLatex: true, //$...$ 与 $$...$$ 定界的 LaTeX 需显式开启（默认只认 \(...\)/\[...\]）
                   //行内公式与正文同字号；块公式超宽时横向滚动，避免溢出气泡
@@ -424,7 +626,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 ),
               ),
               child: GptMarkdown(
-                content,
+                _normalizeItalic(content),
                 style: const TextStyle(fontSize: 15, height: 1.4),
                 useDollarSignsForLatex: true,
                 styleSheet: const GptMarkdownStyleSheet(
@@ -451,36 +653,22 @@ class _GroupChatPageState extends State<GroupChatPage> {
       child: Row(
         children: [
           Expanded(
-            child: Focus(
-              //桌面端：Ctrl+Enter 发送，Enter 换行；移动端不拦截（软键盘 Enter 即换行，靠按钮发送）
-              onKeyEvent: (node, event) {
-                if (!_isDesktop) return KeyEventResult.ignored;
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.enter &&
-                    HardwareKeyboard.instance.isControlPressed) {
-                  if (_inputController.text.trim().isNotEmpty && !_sending) {
-                    _sendMessage();
-                  }
-                  return KeyEventResult.handled; //吞掉按键，避免插入换行
-                }
-                return KeyEventResult.ignored;
-              },
-              child: TextField(
-                controller: _inputController,
-                enabled: !_sending, //模拟回复期间暂锁
-                minLines: 1,
-                maxLines: 6, //多行输入，超过 6 行内部滚动
-                keyboardType: TextInputType.multiline,
-                decoration: InputDecoration(
-                  hintText: _isDesktop
-                      ? '输入消息…（Ctrl+Enter 发送，Enter 换行）'
-                      : '输入消息…',
-                  hintStyle: const TextStyle(fontSize: 13),
-                  border: InputBorder.none,
-                  isDense: true,
-                ),
-                style: const TextStyle(fontSize: 15),
+            child: TextField(
+              controller: _inputController,
+              focusNode: _inputFocus,
+              enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
+              minLines: 1,
+              maxLines: 6, //多行输入，超过 6 行内部滚动
+              keyboardType: TextInputType.multiline,
+              decoration: InputDecoration(
+                hintText: _isDesktop
+                    ? '输入消息…（Ctrl+Enter 发送，Enter 换行）'
+                    : '输入消息…',
+                hintStyle: const TextStyle(fontSize: 13),
+                border: InputBorder.none,
+                isDense: true,
               ),
+              style: const TextStyle(fontSize: 15),
             ),
           ),
           const SizedBox(width: 8),
@@ -488,7 +676,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: _inputController,
             builder: (context, value, _) {
-              final canSend = value.text.trim().isNotEmpty && !_sending;
+              final canSend = value.text.trim().isNotEmpty && !_busy;
               return IconButton(
                 onPressed: canSend ? _sendMessage : null,
                 icon: Icon(

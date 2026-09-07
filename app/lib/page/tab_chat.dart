@@ -5,7 +5,7 @@ import 'package:tutor_chat/service/storage.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
 
 //聊天页 = 会话列表：每行一个课程群聊（微信会话样式）
-//群名 + 最后一条消息预览 + 时间；点击进入群聊页（待实现）
+//群名 + 最后一条消息预览 + 时间；点击进入群聊页；更名/删除入口在 AppBar 齿轮菜单
 class TabChat extends StatefulWidget {
   const TabChat({super.key});
 
@@ -36,7 +36,27 @@ class _TabChatState extends State<TabChat> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('TutorChat')), //无右上按钮：建课入口在通讯录
+      appBar: AppBar(
+        title: const Text('TutorChat'),
+        actions: [
+          //管理菜单（与通讯录页同款齿轮）：更名 / 删除群聊；建课入口仍在通讯录
+          PopupMenuButton(
+            icon: const Icon(Icons.settings),
+            onSelected: (value) async {
+              switch (value) {
+                case 'rename':
+                  await _showRenameCourseDialog();
+                case 'delete':
+                  await _showDeleteCourseDialog();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'rename', child: Text('更名群聊')),
+              PopupMenuItem(value: 'delete', child: Text('删除群聊')),
+            ],
+          ),
+        ],
+      ),
       body: _buildBody(),
     );
   }
@@ -87,15 +107,16 @@ class _TabChatState extends State<TabChat> {
     return Material(
       color: Colors.white, //白底同时是按压水波纹的载体
       child: InkWell(
-        onTap: () {
-          Navigator.push(
+        onTap: () async {
+          //从群聊页返回即刷新列表：预览/排序跟随最新落档（群聊页内生成的新消息）
+          await Navigator.push(
             context,
             CupertinoPageRoute(
               builder: (context) => GroupChatPage(courseName: name),
             ),
           );
+          _loadConversations();
         },
-        onLongPress: () => _showConversationMenu(name),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
@@ -139,38 +160,49 @@ class _TabChatState extends State<TabChat> {
     );
   }
 
-  //长按会话：更名 / 删除课程（微信长按会话交互）
-  Future<void> _showConversationMenu(String courseName) async {
-    final action = await showModalBottomSheet<String>(
+  //菜单第 1 步：列出全部群聊供选择；无群聊时提示并返回 null（取消）
+  Future<String?> _pickCourse(String title) async {
+    if (_conversations.isEmpty) {
+      if (!mounted) return null;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('当前没有群聊'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+      return null;
+    }
+    if (!mounted) return null;
+    return showDialog<String>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('更名'),
-              onTap: () => Navigator.pop(context, 'rename'),
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        //限高：群聊多时列表内滚动，避免对话框溢出屏幕
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 400),
+          child: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _conversations.length,
+              itemBuilder: (context, i) {
+                final name = _conversations[i]['name'] as String;
+                return ListTile(
+                  title: Text(name),
+                  onTap: () => Navigator.pop(context, name),
+                );
+              },
             ),
-            ListTile(
-              leading: const Icon(Icons.delete, color: Colors.red),
-              title: const Text(
-                '删除课程',
-                style: TextStyle(color: Colors.red),
-              ),
-              onTap: () => Navigator.pop(context, 'delete'),
-            ),
-          ],
+          ),
         ),
       ),
     );
-    if (action == null || !mounted) return; //用户取消
-    if (action == 'rename') await _renameCourse(courseName);
-    if (action == 'delete') await _deleteCourse(courseName);
   }
 
-  //更名课程：弹重命名对话框，成功后刷新列表
-  Future<void> _renameCourse(String oldName) async {
+  //更名群聊：选课程 → 弹重命名对话框（预填旧名），成功后刷新列表
+  Future<void> _showRenameCourseDialog() async {
+    final oldName = await _pickCourse('选择要更名的群聊');
+    if (oldName == null || !mounted) return; //取消选择
     final controller = TextEditingController(text: oldName);
     final newName = await showDialog<String>(
       context: context,
@@ -205,13 +237,15 @@ class _TabChatState extends State<TabChat> {
     _loadConversations();
   }
 
-  //删除课程：红字二次确认后删除整个课程目录
-  Future<void> _deleteCourse(String courseName) async {
+  //删除群聊：选课程 → 红字二次确认 → 删除整个课程目录并刷新列表
+  Future<void> _showDeleteCourseDialog() async {
+    final course = await _pickCourse('选择要删除的群聊');
+    if (course == null || !mounted) return; //取消选择
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('删除「$courseName」？'),
-        content: const Text('删除后不可恢复，确定删除？'),
+        title: Text('删除「$course」？'),
+        content: const Text('将删除该群聊的全部对话与学习进度，删除后不可恢复。确定删除？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -226,7 +260,7 @@ class _TabChatState extends State<TabChat> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await StorageService().deleteCourse(courseName);
+    await StorageService().deleteCourse(course);
     if (!mounted) return;
     _loadConversations();
   }

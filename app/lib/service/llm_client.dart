@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
 //协议层：OpenAI 兼容 chat/completions 的 POST + SSE 流式解析 + 重试 + usage 解析。
@@ -74,10 +75,63 @@ class LlmClient {
   final http.Client _http;
   final Random _random = Random();
 
+  //usage 累计（实例级）：进群聊页新建 service 即清零，对应一次会话的总账
+  int _sumPrompt = 0;
+  int _sumHit = 0;
+  int _sumOutput = 0;
+
   LlmClient({http.Client? client}) : _http = client ?? http.Client();
+
+  // —— 连通性检验（设置页）——
+
+  ///最小请求（max_tokens=1）验证接口地址 / Key / 模型可用；不计入 usage 日志累计。
+  ///返回 (是否成功, 描述)；描述供对话框内展示（成功含耗时，失败含状态码/可读原因）。
+  Future<(bool, String)> ping(LlmConfig config) async {
+    final request = http.Request('POST', Uri.parse(config.completionsUrl))
+      ..headers['Authorization'] = 'Bearer ${config.apiKey}'
+      ..headers['Content-Type'] = 'application/json'
+      ..body = jsonEncode({
+        'model': config.model,
+        'messages': [
+          {'role': 'user', 'content': 'ping'},
+        ],
+        'max_tokens': 1, //最小开销
+        'stream': false,
+      });
+
+    final stopwatch = Stopwatch()..start();
+    final http.StreamedResponse response;
+    try {
+      response = await _http.send(request).timeout(const Duration(seconds: 15));
+    } catch (e) {
+      return (false, '无法连接：$e');
+    }
+    stopwatch.stop();
+
+    if (response.statusCode != 200) {
+      final errorBody = await response.stream.bytesToString();
+      final code = response.statusCode;
+      //常见状态码给出可读原因，其余透传服务端错误摘要
+      final hint = switch (code) {
+        401 => 'Key 无效或未授权',
+        404 => '接口地址或模型不存在',
+        429 => '请求过于频繁或额度不足',
+        _ => '',
+      };
+      final detail = hint.isNotEmpty
+          ? hint
+          : _extractErrorMessage(errorBody, code);
+      return (false, 'HTTP $code：$detail');
+    }
+    return (
+      true,
+      '连接成功 · ${config.model} · ${stopwatch.elapsedMilliseconds}ms',
+    );
+  }
 
   ///发起一次对话。stream=false 时等待完整响应（课后更新用）；
   ///stream=true 时逐 chunk 拼接，onDelta 实时回调增量（UI「正在输入中」动画可用）。
+  ///label：场景标签，stdout usage 调试行用（问答/上课/问候/总结/更新/群聊）。
   ///失败重试后仍耗尽 → 抛 LlmException，由场景层决定善后。
   Future<LlmResult> chat({
     required LlmConfig config,
@@ -85,6 +139,7 @@ class LlmClient {
     bool jsonMode = false, //true → response_format json_object（仅课后更新）
     bool stream = true,
     void Function(String delta)? onDelta,
+    String? label,
   }) async {
     final body = jsonEncode({
       'model': config.model,
@@ -96,8 +151,11 @@ class LlmClient {
 
     var attempt = 0;
     while (true) {
+      final sw = Stopwatch()..start();
       try {
-        return await _once(config, body, stream, onDelta);
+        final result = await _once(config, body, stream, onDelta);
+        _logUsage(label, result.usage, sw.elapsedMilliseconds);
+        return result;
       } on LlmException catch (e) {
         attempt++;
         if (attempt >= _maxAttempts || !_isRetryable(e)) rethrow;
@@ -105,6 +163,28 @@ class LlmClient {
         if (delay > 0) await Future<void>.delayed(Duration(milliseconds: delay));
       }
     }
+  }
+
+  //usage 调试输出（04：仅 stdout，不写入 CHAT）：单次一行 + 实例累计。
+  //「缓存写入」= 未命中部分（本次实际计费输入，服务商将其写入缓存供后续请求命中）；
+  //「命中」= prompt_tokens 里由缓存覆盖的部分（约 1/10 计价）。
+  void _logUsage(String? label, LlmUsage? u, int ms) {
+    final tag = label == null ? '' : ' $label';
+    if (u == null) {
+      debugPrint('[llm$tag] 服务商未返回 usage');
+      return;
+    }
+    final prompt = u.input + u.cacheRead; //总输入 = 未命中 + 命中
+    _sumPrompt += prompt;
+    _sumHit += u.cacheRead;
+    _sumOutput += u.output;
+    final rate = prompt == 0 ? 0.0 : u.cacheRead * 100 / prompt;
+    final sumRate = _sumPrompt == 0 ? 0.0 : _sumHit * 100 / _sumPrompt;
+    debugPrint(
+      '[llm$tag] 入=$prompt（命中 ${u.cacheRead} + 写入 ${u.input}）出=${u.output} '
+      '命中率=${rate.toStringAsFixed(1)}% ${ms}ms'
+      ' ｜累计 入=$_sumPrompt 出=$_sumOutput 命中率=${sumRate.toStringAsFixed(1)}%',
+    );
   }
 
   //单次请求：等待响应头（30s）→ 流式消费或整段读取

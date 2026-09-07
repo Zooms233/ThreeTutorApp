@@ -215,24 +215,28 @@ class StorageService {
         result.add({
           'name': course,
           'date': '',
+          'lastTime': '',
           'preview': '尚未开始上课',
         });
         continue;
       }
 
-      //读取首行 meta 与最后一条 message（从后往前找，跳过其他行型）
-      final lines = (await files.last
-              .readAsString())
-          .split('\n')
-          .where((l) => l.trim().isNotEmpty)
-          .toList();
-      final meta = jsonDecode(lines.first) as Map<String, dynamic>;
+      //meta 取最新文件首行；最后一条 message 跨文件从后往前找——
+      //群聊讨论写在上一课文件尾，最新消息可能在倒数第二个文件（四段文件组织）
+      final meta = jsonDecode((await files.last.readAsLines()).first) as Map<String, dynamic>;
       Map<String, dynamic>? lastMessage;
-      for (var i = lines.length - 1; i >= 0; i--) {
-        final row = jsonDecode(lines[i]) as Map<String, dynamic>;
-        if (row['type'] == 'message') {
-          lastMessage = row;
-          break;
+      for (var i = files.length - 1; i >= 0 && lastMessage == null; i--) {
+        final lines = (await files[i]
+                .readAsString())
+            .split('\n')
+            .where((l) => l.trim().isNotEmpty)
+            .toList();
+        for (var j = lines.length - 1; j >= 0; j--) {
+          final row = jsonDecode(lines[j]) as Map<String, dynamic>;
+          if (row['type'] == 'message') {
+            lastMessage = row;
+            break;
+          }
         }
       }
 
@@ -243,18 +247,25 @@ class StorageService {
       result.add({
         'name': course,
         'date': meta['date'] as String? ?? '',
+        'lastTime': lastMessage?['time'] as String? ?? '',
         'preview': '$sender$preview',
       });
     }
 
-    //排序：有消息的按日期倒序，无消息垫底（按名称）
+    //排序：按最后活动倒序（最后一条消息 time；无消息用 meta.date 兑底；无日期垫底）
+    String sortKey(Map<String, dynamic> c) {
+      final t = c['lastTime'] as String? ?? '';
+      if (t.isNotEmpty) return t;
+      return c['date'] as String? ?? '';
+    }
+
     result.sort((a, b) {
-      final da = a['date'] as String;
-      final db = b['date'] as String;
-      if (da.isEmpty && db.isEmpty) return 0;
-      if (da.isEmpty) return 1;
-      if (db.isEmpty) return -1;
-      return db.compareTo(da);
+      final ka = sortKey(a);
+      final kb = sortKey(b);
+      if (ka.isEmpty && kb.isEmpty) return 0;
+      if (ka.isEmpty) return 1;
+      if (kb.isEmpty) return -1;
+      return kb.compareTo(ka);
     });
     return result;
   }
@@ -265,6 +276,7 @@ class StorageService {
     return text
         .replaceAll(RegExp(r'\$\$?[^$]*\$\$?'), '【公式】')
         .replaceAll(RegExp(r'\*+'), '')
+        .replaceAll('_', '') //斜体旁白下划线一并去除（与星号同待遇）
         .replaceAll(RegExp(r'^#+\s*', multiLine: true), '')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();

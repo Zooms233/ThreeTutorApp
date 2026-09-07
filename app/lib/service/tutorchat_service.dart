@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:tutor_chat/service/llm_client.dart';
@@ -15,6 +17,24 @@ class TutorChatService {
   final StorageService _storage;
   final PromptBuilder _prompts;
   final LlmClient _client;
+
+  // —— 跨页面生成中状态 ——
+  //退出聊天页再进入时仍显示「正在输入中」并锁输入框，避免用户消息与后台生成并发写同一文件。
+  //状态由本层（而非页面）持有：页面监听 busyVersion 同步 Banner，进入时经 busyLabelOf 恢复。
+  final Map<String, String> _busy = {}; //courseName → Banner 文案；无条目 = 空闲
+  final ValueNotifier<int> busyVersion = ValueNotifier(0); //busy 每次变更自增，页面监听用
+
+  void _setBusy(String courseName, String label) {
+    if (label.isEmpty) {
+      if (_busy.remove(courseName) != null) busyVersion.value++;
+    } else if (_busy[courseName] != label) {
+      _busy[courseName] = label;
+      busyVersion.value++;
+    }
+  }
+
+  ///某课程当前的生成中 Banner 文案（空 = 空闲）
+  String busyLabelOf(String courseName) => _busy[courseName] ?? '';
 
   TutorChatService({StorageService? storage, PromptBuilder? prompts, LlmClient? client})
       : _storage = storage ?? StorageService(),
@@ -55,6 +75,12 @@ class TutorChatService {
         'name': name,
         'content': content,
       });
+
+  //social 落档目标：上一课文件尾（群聊讨论段）；不足两课时兕底最新文件
+  Future<String> _socialTargetFile(String courseName) async {
+    final files = await _storage.listChatFiles(courseName);
+    return files.length >= 2 ? files[files.length - 2] : files.last;
+  }
 
   //课程内全部导师名（tutor_*.json 的 name 字段）
   Future<List<String>> _tutorNames(String courseDir) async {
@@ -146,28 +172,40 @@ class TutorChatService {
     required String content,
     required bool social,
   }) async {
-    final lesson = await _storage.getCurrentLesson(courseName);
-    final path = lesson['path'] as String;
+    //落档目标：qa 写最新课次文件（下一课区间的交流段）；social 写上一课文件尾（群聊讨论段）
+    final path = social
+        ? await _socialTargetFile(courseName)
+        : (await _storage.getCurrentLesson(courseName))['path'] as String;
     final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
     final responder = meta['tutor'] as String? ?? '导师'; //问答=next_tutor；聊天前缀未命中时的回退
-    final learner = await _storage.loadCourseLearner(courseName);
-    final userName = learner['name'] as String? ?? '学习者';
-    final phase = social ? 'social' : 'qa';
+    _setBusy(courseName, social ? '群里正在输入中…' : '$responder 正在输入中…'); //跨页面生成中状态
+    try {
+      final learner = await _storage.loadCourseLearner(courseName);
+      final userName = learner['name'] as String? ?? '学习者';
+      final phase = social ? 'social' : 'qa';
 
-    await _appendUser(path, userName, content, phase);
+      await _appendUser(path, userName, content, phase);
 
-    final courseDir = await _courseDir(courseName);
-    final messages = social
-        ? await _prompts.social(courseDir: courseDir, chatPath: path)
-        : await _prompts.qa(courseDir: courseDir, chatPath: path, tutorName: responder);
+      final courseDir = await _courseDir(courseName);
+      final messages = social
+          ? await _prompts.social(courseDir: courseDir, chatPath: path)
+          : await _prompts.qa(courseDir: courseDir, chatPath: path, tutorName: responder);
 
-    final result = await _client.chat(config: await _config(), messages: messages, stream: true);
+      final result = await _client.chat(
+        config: await _config(),
+        messages: messages,
+        stream: true,
+        label: social ? '闲聊' : '问答',
+      );
 
-    final (name, text) = social
-        ? _parseReplyLine(result.text, await _tutorNames(courseDir), responder)
-        : (responder, result.text.trim());
-    await _appendTutor(path, name, text, phase);
-    return (name, text);
+      final (name, text) = social
+          ? _parseReplyLine(result.text, await _tutorNames(courseDir), responder)
+          : (responder, result.text.trim());
+      await _appendTutor(path, name, text, phase);
+      return (name, text);
+    } finally {
+      _setBusy(courseName, '');
+    }
   }
 
   // —— 场景 2：上课对话（ongoing + 用户消息）——
@@ -183,15 +221,25 @@ class TutorChatService {
     final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
     if (meta['status'] != 'ongoing') throw LlmException('非上课状态（meta=${meta['status']}），无法走上课对话');
     final tutor = meta['tutor'] as String? ?? '导师';
-    final learner = await _storage.loadCourseLearner(courseName);
-    final userName = learner['name'] as String? ?? '学习者';
+    _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态
+    try {
+      final learner = await _storage.loadCourseLearner(courseName);
+      final userName = learner['name'] as String? ?? '学习者';
 
-    await _appendUser(path, userName, content, 'teaching');
-    final courseDir = await _courseDir(courseName);
-    final messages = await _prompts.teaching(courseDir: courseDir, chatPath: path, tutorName: tutor);
-    final result = await _client.chat(config: await _config(), messages: messages, stream: true);
-    await _appendTutor(path, tutor, result.text, 'teaching');
-    return (tutor, result.text);
+      await _appendUser(path, userName, content, 'teaching');
+      final courseDir = await _courseDir(courseName);
+      final messages = await _prompts.teaching(courseDir: courseDir, chatPath: path, tutorName: tutor);
+      final result = await _client.chat(
+        config: await _config(),
+        messages: messages,
+        stream: true,
+        label: '上课',
+      );
+      await _appendTutor(path, tutor, result.text, 'teaching');
+      return (tutor, result.text);
+    } finally {
+      _setBusy(courseName, '');
+    }
   }
 
   // —— 场景 4：课前问候（「开始上课」按钮）——
@@ -202,48 +250,87 @@ class TutorChatService {
     final lesson = await _storage.getCurrentLesson(courseName);
     final path = lesson['path'] as String;
     final tutor = lesson['tutor'] as String;
-    await _storage.patchChatMeta(path, {'status': 'ongoing'});
+    _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态
+    try {
+      await _storage.patchChatMeta(path, {'status': 'ongoing'});
 
-    final courseDir = await _courseDir(courseName);
-    final dispatch = await rootBundle.loadString('assets/prompts/dispatch_greeting.md');
-    final messages = await _prompts.teaching(
-      courseDir: courseDir,
-      chatPath: path,
-      tutorName: tutor,
-      dispatch: dispatch,
-    );
-    final result = await _client.chat(config: await _config(), messages: messages, stream: true);
-    await _appendTutor(path, tutor, result.text, 'teaching');
-    return result.text;
+      final courseDir = await _courseDir(courseName);
+      final dispatch = await rootBundle.loadString('assets/prompts/dispatch_greeting.md');
+      final messages = await _prompts.teaching(
+        courseDir: courseDir,
+        chatPath: path,
+        tutorName: tutor,
+        dispatch: dispatch,
+      );
+      final result = await _client.chat(
+        config: await _config(),
+        messages: messages,
+        stream: true,
+        label: '问候',
+      );
+      await _appendTutor(path, tutor, result.text, 'teaching');
+      return result.text;
+    } finally {
+      _setBusy(courseName, '');
+    }
   }
 
   // —— 场景 5+6+7：下课总结 → 课后更新 → 导师群聊生成 ——
   //返回值告知 UI 课后更新是否完成（false = meta 保持 ongoing，可重新点击重跑场景 5+6）
 
   ///下课总结（含调度指令）→ 落档后自动课后更新 → 群聊生成（失败跳过）。
+  ///onMessage：每条消息落档即回调（总结一条 + 群聊逐条），UI 逐条弹出用。
   ///抛出 = 总结或更新失败；更新失败时 meta 保持 ongoing、下一课文件不创建。
-  Future<void> endLesson({required String courseName}) async {
+  Future<void> endLesson({
+    required String courseName,
+    void Function(Map<String, dynamic> message)? onMessage,
+  }) async {
     final lesson = await _storage.getCurrentLesson(courseName);
     final path = lesson['path'] as String;
     final tutor = lesson['tutor'] as String;
     final lessonNo = lesson['lesson'] as int;
+    _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态（总结→更新→群聊全程）
 
-    //下课总结（meta 仍 ongoing）
-    final courseDir = await _courseDir(courseName);
-    final dispatch = await rootBundle.loadString('assets/prompts/dispatch_summary.md');
-    final messages = await _prompts.teaching(
-      courseDir: courseDir,
-      chatPath: path,
-      tutorName: tutor,
-      dispatch: dispatch,
-    );
-    final result = await _client.chat(config: await _config(), messages: messages, stream: true);
-    await _appendTutor(path, tutor, result.text, 'teaching');
+    try {
+      //下课总结（meta 仍 ongoing）
+      final courseDir = await _courseDir(courseName);
+      final dispatch = await rootBundle.loadString('assets/prompts/dispatch_summary.md');
+      final messages = await _prompts.teaching(
+        courseDir: courseDir,
+        chatPath: path,
+        tutorName: tutor,
+        dispatch: dispatch,
+      );
+      final result = await _client.chat(
+        config: await _config(),
+        messages: messages,
+        stream: true,
+        label: '总结',
+      );
+      await _appendTutor(path, tutor, result.text, 'teaching');
+      //总结落档即回调：UI 先显示导师告别，再逐条放群聊
+      onMessage?.call({
+        'type': 'message',
+        'phase': 'teaching',
+        'role': 'tutor',
+        'name': tutor,
+        'content': result.text,
+      });
 
-    //总结落档 → 课后更新（JSON 解析重试 1 次后仍失败 → 保持 ongoing）
-    final updated = await _postLessonUpdate(courseName, courseDir, path, tutor, lessonNo);
-    if (!updated) {
-      throw LlmException('课后更新失败：meta 保持 ongoing，可重新点击「今天就到这里」重跑');
+      //总结落档 → 课后更新（JSON 解析重试 1 次后仍失败 → 保持 ongoing）
+      final updated = await _postLessonUpdate(
+        courseName,
+        courseDir,
+        path,
+        tutor,
+        lessonNo,
+        onMessage: onMessage,
+      );
+      if (!updated) {
+        throw LlmException('课后更新失败：meta 保持 ongoing，可重新点击「今天就到这里」重跑');
+      }
+    } finally {
+      _setBusy(courseName, '');
     }
   }
 
@@ -253,8 +340,9 @@ class TutorChatService {
     String courseDir,
     String lessonPath,
     String tutorName,
-    int lessonNo,
-  ) async {
+    int lessonNo, {
+    void Function(Map<String, dynamic> message)? onMessage,
+  }) async {
     Map<String, dynamic>? output;
     for (var attempt = 0; attempt < 2; attempt++) {
       final messages =
@@ -264,6 +352,7 @@ class TutorChatService {
         messages: messages,
         stream: false,
         jsonMode: true,
+        label: '更新',
       );
       try {
         output = _extractJson(result.text);
@@ -272,12 +361,14 @@ class TutorChatService {
         if (attempt == 1) return false; //重试后仍解析失败
       }
     }
-    //写档五步；返回创建的下一课文件路径（群聊生成写档目标）
-    final nextPath = await _applyLessonUpdate(courseName, courseDir, lessonPath, tutorName, lessonNo, output!);
-    //群聊生成：输入=本课对话，写档=下一课文件头；失败跳过，不阻塞课后更新其余成果
+    //写档四步；群聊生成写本课文件尾；下一课文件在群聊落档后创建（qa 交流写它的头部）
+    final nextTutor = await _applyLessonUpdate(courseName, courseDir, lessonPath, tutorName, lessonNo, output!);
+    _setBusy(courseName, '群里正在输入中…'); //群聊阶段切换 Banner 文案（跨页面状态）
+    //群聊生成：输入=本课对话，写档=本课文件尾（总结之后）；失败跳过，不阻塞课后更新其余成果
     try {
-      await _generateGroupChat(courseDir, lessonPath, nextPath);
+      await _generateGroupChat(courseDir, lessonPath, lessonPath, onMessage: onMessage);
     } catch (_) {}
+    await _storage.createLessonFile(courseName, lessonNo + 1, nextTutor);
     return true;
   }
 
@@ -342,31 +433,64 @@ class TutorChatService {
 
     //4. 本课 meta：status→ended、date→实际完成日（lesson/tutor 保持）
     await _storage.patchChatMeta(lessonPath, {'status': 'ended', 'date': today});
-
-    //5. 创建下一课文件（idle 预填，tutor=轮换后）
-    return _storage.createLessonFile(courseName, lessonNo + 1, nextTutor);
+    return nextTutor;
   }
 
-  //场景 7：导师群聊生成（聊天职责的自动版）——解析前缀逐条写档，写入下一课文件头
-  Future<void> _generateGroupChat(String courseDir, String chatPath, String targetPath) async {
+  //场景 7：导师群聊生成（聊天职责的自动版）——流式逐行落档，写入本课文件尾
+  //每行「导师名: 内容」在流式输出中生成完整（遇换行）即写档并回调，UI 实时逐条弹出，
+  //不再等全量聚合后人为加延迟（那样长响应期间用户什么都看不到）。
+  Future<void> _generateGroupChat(
+    String courseDir,
+    String chatPath,
+    String targetPath, {
+    void Function(Map<String, dynamic> message)? onMessage,
+  }) async {
     final dispatch = await rootBundle.loadString('assets/prompts/dispatch_group.md');
     final messages = await _prompts.groupChat(courseDir: courseDir, chatPath: chatPath, dispatch: dispatch);
-    final result = await _client.chat(config: await _config(), messages: messages, stream: true);
     final names = await _tutorNames(courseDir);
     //未命中导师名 → name 取 meta.tutor（本课导师，04 规定）
     final meta = jsonDecode((await File(chatPath).readAsLines()).first) as Map<String, dynamic>;
     final fallback = meta['tutor'] as String? ?? (names.isNotEmpty ? names.first : '导师');
-    for (final line in result.text.split('\n')) {
-      if (line.trim().isEmpty) continue;
+
+    //流式逐行解析：delta 增量拼入 buffer，每遇完整行即解析落档；
+    //写档用串行链保证行序（文件追加不能并发）；解析本身同步（在 onDelta 回调里）
+    Future<void> chain = Future.value();
+    var buffer = '';
+    void onLine(String raw) {
+      final line = raw.replaceAll('\r', '').trim();
+      if (line.isEmpty) return;
       final (name, content) = _parseReplyLine(line, names, fallback);
-      if (content.isEmpty) continue;
-      await _storage.appendChatMessage(targetPath, {
+      if (content.isEmpty) return;
+      final message = {
         'type': 'message',
         'phase': 'social',
         'role': 'tutor',
         'name': name,
         'content': content,
+        'auto': true, //课后自动生成标记（qa 写入目标文件不含本文件，渲染忽略）
+      };
+      chain = chain.then((_) async {
+        await _storage.appendChatMessage(targetPath, message);
+        onMessage?.call(message);
       });
     }
+
+    await _client.chat(
+      config: await _config(),
+      messages: messages,
+      stream: true,
+      label: '群聊',
+      onDelta: (delta) {
+        buffer += delta;
+        for (;;) {
+          final i = buffer.indexOf('\n');
+          if (i < 0) break;
+          onLine(buffer.substring(0, i));
+          buffer = buffer.substring(i + 1);
+        }
+      },
+    );
+    onLine(buffer); //流末残留行（无换行结尾）
+    await chain; //等最后一条落档完成（异常传播给调用方的群聊跳过逻辑）
   }
 }
