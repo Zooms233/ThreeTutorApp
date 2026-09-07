@@ -21,11 +21,13 @@ class TutorChatService {
 
   // —— 跨页面生成中状态 ——
   //退出聊天页再进入时仍显示「正在输入中」并锁输入框，避免用户消息与后台生成并发写同一文件。
-  //状态由本层（而非页面）持有：页面监听 busyVersion 同步 Banner，进入时经 busyLabelOf 恢复。
-  final Map<String, String> _busy = {}; //courseName → Banner 文案；无条目 = 空闲
-  final ValueNotifier<int> busyVersion = ValueNotifier(0); //busy 每次变更自增，页面监听用
+  //状态由本层（而非页面）持有，且 static 跨实例共享：聊天页每次进入都新建 service 实例，
+  //busy 若挂在实例上，退出重进后新实例读不到进行中状态、也收不到完成通知
+  //（Banner 丢失 + 完成后不触发刷新——下课总结→更新→群聊全程跨页面存活的关键）。
+  static final Map<String, String> _busy = {}; //courseName → Banner 文案；无条目 = 空闲
+  static final ValueNotifier<int> busyVersion = ValueNotifier(0); //busy 每次变更自增，页面监听用
 
-  void _setBusy(String courseName, String label) {
+  static void _setBusy(String courseName, String label) {
     if (label.isEmpty) {
       if (_busy.remove(courseName) != null) busyVersion.value++;
     } else if (_busy[courseName] != label) {
@@ -35,7 +37,12 @@ class TutorChatService {
   }
 
   ///某课程当前的生成中 Banner 文案（空 = 空闲）
-  String busyLabelOf(String courseName) => _busy[courseName] ?? '';
+  static String busyLabelOf(String courseName) => _busy[courseName] ?? '';
+
+  ///页面侧占位：场景方法发出请求前预先占 busy（如建档后问候前），
+  ///使输入框/按钮立即锁定，避免用户消息与即将发出的后台写入竞态
+  static void setBusyForCourse(String courseName, String label) =>
+      _setBusy(courseName, label);
 
   TutorChatService({StorageService? storage, PromptBuilder? prompts, LlmClient? client})
       : _storage = storage ?? StorageService(),

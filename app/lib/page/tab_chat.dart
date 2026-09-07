@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:tutor_chat/page/chat/group_chat_page.dart';
 import 'package:tutor_chat/service/storage.dart';
+import 'package:tutor_chat/service/tutorchat_service.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
 
 //聊天页 = 会话列表：每行一个课程群聊（微信会话样式）
@@ -20,7 +21,19 @@ class _TabChatState extends State<TabChat> {
   @override
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
+    //监听共享 busy 表：任一课程生成中，对应会话行预览位置显示绿色小字
+    TutorChatService.busyVersion.addListener(_onBusyChanged);
     _loadConversations();
+  }
+
+  @override
+  void dispose() {
+    TutorChatService.busyVersion.removeListener(_onBusyChanged);
+    super.dispose();
+  }
+
+  void _onBusyChanged() {
+    if (mounted) setState(() {}); //busy 文案经 busyLabelOf 即时读取
   }
 
   //扫描课程目录并刷新会话列表
@@ -136,9 +149,17 @@ class _TabChatState extends State<TabChat> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
+                    //生成中：预览位置显示绿色小字（微信「对方正在输入…」同款）
                     Text(
-                      preview,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF999999)),
+                      TutorChatService.busyLabelOf(name).isEmpty
+                          ? preview
+                          : TutorChatService.busyLabelOf(name),
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: TutorChatService.busyLabelOf(name).isEmpty
+                            ? const Color(0xFF999999)
+                            : const Color(0xFF07C160),
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),

@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:tutor_chat/page/chat/group_chat_page.dart';
 import 'package:tutor_chat/page/contact/create_course_page.dart';
 import 'package:tutor_chat/widget/tutor_avatar.dart';
 import 'package:tutor_chat/page/contact/tutor_profile_page.dart';
@@ -194,9 +195,14 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
       return;
     }
 
-    //仅一个课程：直接进入（群聊页实现前先占位提示）
+    //仅一个课程：直接进入
     if (_courses.length == 1) {
-      _showOpenPlaceholder(_courses.first);
+      Navigator.push(
+        context,
+        CupertinoPageRoute(
+          builder: (_) => GroupChatPage(courseName: _courses.first),
+        ),
+      );
       return;
     }
 
@@ -214,15 +220,11 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
       ),
     );
     if (selected == null || !mounted) return; //用户取消选择
-    _showOpenPlaceholder(selected);
-  }
-
-  //占位提示：群聊页待实现
-  void _showOpenPlaceholder(String course) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('群聊页待实现：$course'),
-        duration: Duration(seconds: 1),
+    //直接进入该课程群聊页（原「待实现」占位提示为遗留）
+    Navigator.push(
+      context,
+      CupertinoPageRoute(
+        builder: (_) => GroupChatPage(courseName: selected),
       ),
     );
   }

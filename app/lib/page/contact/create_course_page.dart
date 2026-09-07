@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:tutor_chat/page/chat/group_chat_page.dart';
 import 'package:tutor_chat/service/storage.dart';
 
 //创建课程表单：从导师资料页「创建群聊」进入
@@ -53,9 +55,10 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
 
+    final courseName = _courseName.text.trim();
     final error = await StorageService().createCourse(
       worldName: widget.worldName,
-      courseName: _courseName.text.trim(),
+      courseName: courseName,
       learnerName: _learnerName.text.trim(),
       motivation: _motivation.text.trim(),
       extra: _extra.text.trim(),
@@ -73,11 +76,17 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('课程已创建，群聊页待实现'),
+        content: Text('课程已创建'),
         duration: Duration(seconds: 1),
       ),
     );
-    Navigator.pop(context);
+    //直接进入新建课程的群聊页（replace 替换表单页：返回时跳过已完成的表单）
+    Navigator.pushReplacement(
+      context,
+      CupertinoPageRoute(
+        builder: (_) => GroupChatPage(courseName: courseName),
+      ),
+    );
   }
 
   @override
