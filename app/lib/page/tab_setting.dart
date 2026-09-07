@@ -48,13 +48,7 @@ class _TabSettingState extends State<TabSetting> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('设置'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'API 配置',
-            onPressed: _showApiConfigDialog,
-          ),
-        ],
+        //API 配置唯一入口 = 下方摘要卡（未配置时显示引导文案，同样可点进配置）
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
