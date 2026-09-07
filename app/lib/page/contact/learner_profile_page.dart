@@ -46,13 +46,15 @@ class _LearnerProfilePageState extends State<LearnerProfilePage> {
     );
   }
 
-  //档案内容：身份 + 故事背景
+  //档案内容：称呼 + 学习动机（identity/story 字段已废——教学不需要世界观扮演）
   Widget _buildProfile(Map<String, dynamic> profile) {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _section('身份', Text(profile['identity'] as String)),
-        _section('故事背景', Text(profile['story'] as String)),
+        _section('称呼', Text(profile['name'] as String? ?? '')),
+        _section('学习动机', Text(profile['motivation'] as String? ?? '')),
+        if ((profile['extra'] as String? ?? '').isNotEmpty)
+          _section('其他', Text(profile['extra'] as String)),
       ],
     );
   }

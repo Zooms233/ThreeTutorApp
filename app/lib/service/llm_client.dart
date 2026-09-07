@@ -10,19 +10,25 @@ import 'package:http/http.dart' as http;
 //对业务无感知：输入 messages，输出全文 + usage；规则对齐 pi packages/ai（provider-retry 与 openai-completions）。
 
 class LlmConfig {
-  final String apiUrl; //如 https://api.deepseek.com/v1（尾斜杠归一化后拼接 /chat/completions）
+  final String
+  apiUrl; //如 https://api.deepseek.com/v1（尾斜杠归一化后拼接 /chat/completions）
   final String apiKey;
   final String model;
 
-  const LlmConfig({required this.apiUrl, required this.apiKey, required this.model});
+  const LlmConfig({
+    required this.apiUrl,
+    required this.apiKey,
+    required this.model,
+  });
 
   factory LlmConfig.fromMap(Map<String, dynamic> map) => LlmConfig(
-        apiUrl: map['apiUrl'] as String? ?? '',
-        apiKey: map['apiKey'] as String? ?? '',
-        model: map['model'] as String? ?? '',
-      );
+    apiUrl: map['apiUrl'] as String? ?? '',
+    apiKey: map['apiKey'] as String? ?? '',
+    model: map['model'] as String? ?? '',
+  );
 
-  bool get isReady => apiUrl.isNotEmpty && apiKey.isNotEmpty && model.isNotEmpty;
+  bool get isReady =>
+      apiUrl.isNotEmpty && apiKey.isNotEmpty && model.isNotEmpty;
 
   String get completionsUrl {
     var url = apiUrl;
@@ -37,13 +43,21 @@ class LlmConfig {
 
 class LlmUsage {
   final int input; //prompt_tokens - cacheRead（缓存未命中部分）
-  final int output;
+  final int output; //completion_tokens（含思考 token）
   final int cacheRead;
+  final int
+  reasoning; //思考 token（混合推理模型 completion_tokens_details.reasoning_tokens）
 
-  const LlmUsage({required this.input, required this.output, required this.cacheRead});
+  const LlmUsage({
+    required this.input,
+    required this.output,
+    required this.cacheRead,
+    this.reasoning = 0,
+  });
 
   @override
-  String toString() => 'input=$input output=$output cacheRead=$cacheRead';
+  String toString() =>
+      'input=$input output=$output reasoning=$reasoning cacheRead=$cacheRead';
 }
 
 class LlmResult {
@@ -79,6 +93,7 @@ class LlmClient {
 
   //usage 累计（实例级）：进群聊页新建 service 即清零，对应一次会话的总账
   int _sumPrompt = 0;
+  int _sumReasoning = 0; //思考 token 累计（混合推理模型的隐藏成本，单独可见）
   int _sumHit = 0;
   int _sumOutput = 0;
 
@@ -138,8 +153,13 @@ class LlmClient {
   Future<LlmResult> chat({
     required LlmConfig config,
     required List<Map<String, String>> messages,
-    bool jsonMode = false, //true → response_format json_object（仅课后更新）
+    bool jsonMode = false, //true → response_format json_object（JSON 协议场景）
     bool stream = true,
+    int? maxTokens, //生成上限（JSON 场景 4096：文档建议合理设置防截断，也防输出失控）
+    String? thinkingEffort, //思考档位控制（官方：开关 thinking.type + 强度 reasoning_effort）；
+    //null=模型默认（enabled + effort high）；'disabled'=关闭；'low'=低强度。
+    //默认 high 下重任务（更新/群聊）思考数万 token，耗时与 output 计费双双爆炸；
+    //但直接 disabled 会让重任务指令遵循崩掉（实测复读用户指令而非执行）——重任务用 'low'。
     void Function(String delta)? onDelta,
     String? label,
   }) async {
@@ -148,6 +168,13 @@ class LlmClient {
       'stream': stream,
       if (stream) 'stream_options': {'include_usage': true}, //流式末尾附带 usage
       if (jsonMode) 'response_format': {'type': 'json_object'},
+      ?maxTokens: maxTokens,
+      if (thinkingEffort != null) ...{
+        'thinking': {
+          'type': thinkingEffort == 'disabled' ? 'disabled' : 'enabled',
+        },
+        if (thinkingEffort != 'disabled') 'reasoning_effort': thinkingEffort,
+      },
       'messages': messages,
     });
 
@@ -162,7 +189,9 @@ class LlmClient {
         attempt++;
         if (attempt >= _maxAttempts || !_isRetryable(e)) rethrow;
         final delay = _retryDelayMs(e, attempt - 1);
-        if (delay > 0) await Future<void>.delayed(Duration(milliseconds: delay));
+        if (delay > 0) {
+          await Future<void>.delayed(Duration(milliseconds: delay));
+        }
       }
     }
   }
@@ -180,12 +209,13 @@ class LlmClient {
     _sumPrompt += prompt;
     _sumHit += u.cacheRead;
     _sumOutput += u.output;
+    _sumReasoning += u.reasoning;
     final rate = prompt == 0 ? 0.0 : u.cacheRead * 100 / prompt;
     final sumRate = _sumPrompt == 0 ? 0.0 : _sumHit * 100 / _sumPrompt;
     debugPrint(
-      '[llm$tag] 入=$prompt（命中 ${u.cacheRead} + 写入 ${u.input}）出=${u.output} '
+      '[llm$tag] 入=$prompt（命中 ${u.cacheRead} + 写入 ${u.input}）出=${u.output}（思考 ${u.reasoning}）'
       '命中率=${rate.toStringAsFixed(1)}% ${ms}ms'
-      ' ｜累计 入=$_sumPrompt 出=$_sumOutput 命中率=${sumRate.toStringAsFixed(1)}%',
+      ' ｜累计 入=$_sumPrompt 出=$_sumOutput 思考=$_sumReasoning 命中率=${sumRate.toStringAsFixed(1)}%',
     );
   }
 
@@ -205,7 +235,10 @@ class LlmClient {
     try {
       response = await _http
           .send(request)
-          .timeout(_headerTimeout, onTimeout: () => throw LlmException('连接超时（30s 无响应头）'));
+          .timeout(
+            _headerTimeout,
+            onTimeout: () => throw LlmException('连接超时（30s 无响应头）'),
+          );
     } on LlmException {
       rethrow;
     } catch (e) {
@@ -215,20 +248,29 @@ class LlmClient {
     if (response.statusCode != 200) {
       final errorBody = await response.stream.bytesToString();
       throw LlmException(
-          _extractErrorMessage(errorBody, response.statusCode), response.statusCode, response.headers);
+        _extractErrorMessage(errorBody, response.statusCode),
+        response.statusCode,
+        response.headers,
+      );
     }
 
     if (!stream) {
       final text = await response.stream.bytesToString();
       final json = jsonDecode(text) as Map<String, dynamic>;
       if (json['error'] != null) {
-        throw LlmException(_errorText(json['error']), response.statusCode, response.headers);
+        throw LlmException(
+          _errorText(json['error']),
+          response.statusCode,
+          response.headers,
+        );
       }
       var content = '';
       final choices = json['choices'] as List?;
       if (choices != null && choices.isNotEmpty) {
         final message = (choices.first as Map<String, dynamic>)['message'];
-        if (message is Map<String, dynamic>) content = message['content'] as String? ?? '';
+        if (message is Map<String, dynamic>) {
+          content = message['content'] as String? ?? '';
+        }
       }
       return LlmResult(text: content, usage: _parseUsage(json['usage']));
     }
@@ -240,7 +282,8 @@ class LlmClient {
     var sawDone = false;
 
     try {
-      await for (final chunk in _idleGuard(response.stream)) {        lineBuffer.write(utf8.decode(chunk, allowMalformed: true));
+      await for (final chunk in _idleGuard(response.stream)) {
+        lineBuffer.write(utf8.decode(chunk, allowMalformed: true));
         final lines = lineBuffer.toString().split('\n');
         lineBuffer
           ..clear()
@@ -255,18 +298,26 @@ class LlmClient {
           }
           final chunkJson = jsonDecode(data) as Map<String, dynamic>;
           if (chunkJson['error'] != null) {
-            throw LlmException(_errorText(chunkJson['error']), response.statusCode, response.headers);
+            throw LlmException(
+              _errorText(chunkJson['error']),
+              response.statusCode,
+              response.headers,
+            );
           }
           //usage 兼容：chunk.usage 优先，choice.usage 兜底（Moonshot 等服务商差异，对齐 pi）
           usage ??= _parseUsage(chunkJson['usage']);
           String? delta;
           final choices = chunkJson['choices'] as List?;
           if (usage == null && choices != null && choices.isNotEmpty) {
-            usage = _parseUsage((choices.first as Map<String, dynamic>)['usage']);
+            usage = _parseUsage(
+              (choices.first as Map<String, dynamic>)['usage'],
+            );
           }
           if (choices != null && choices.isNotEmpty) {
             final deltaMap = (choices.first as Map<String, dynamic>)['delta'];
-            if (deltaMap is Map<String, dynamic>) delta = deltaMap['content'] as String?;
+            if (deltaMap is Map<String, dynamic>) {
+              delta = deltaMap['content'] as String?;
+            }
           }
           if (delta != null && delta.isNotEmpty) {
             buffer.write(delta);
@@ -280,7 +331,11 @@ class LlmClient {
     }
 
     if (!sawDone) {
-      throw LlmException('连接关闭但未收到 [DONE]（断流）', response.statusCode, response.headers);
+      throw LlmException(
+        '连接关闭但未收到 [DONE]（断流）',
+        response.statusCode,
+        response.headers,
+      );
     }
     return LlmResult(text: buffer.toString(), usage: usage);
   }
@@ -323,7 +378,10 @@ class LlmClient {
     if (e.isNetworkError) return true;
     if (e.headers?['x-should-retry'] == 'true') return true;
     if (e.headers?['x-should-retry'] == 'false') return false;
-    return e.statusCode == 408 || e.statusCode == 409 || e.statusCode == 429 || e.statusCode! >= 500;
+    return e.statusCode == 408 ||
+        e.statusCode == 409 ||
+        e.statusCode == 429 ||
+        e.statusCode! >= 500;
   }
 
   //退避：retry-after-ms / retry-after 头优先（超 60s 上限则放弃，重抛原错）；否则指数 0.5s*2^n 封顶 8s，乘 1-0~0.25 抖动
@@ -354,12 +412,20 @@ class LlmClient {
     if (raw is! Map<String, dynamic>) return null;
     final promptTokens = raw['prompt_tokens'] as int? ?? 0;
     final details = raw['prompt_tokens_details'] as Map<String, dynamic>?;
-    final cacheRead = details?['cached_tokens'] as int? ??
+    final cacheRead =
+        details?['cached_tokens'] as int? ??
         raw['prompt_cache_hit_tokens'] as int? ??
         raw['cached_tokens'] as int? ??
         0;
     final output = raw['completion_tokens'] as int? ?? 0;
-    return LlmUsage(input: max(0, promptTokens - cacheRead), output: output, cacheRead: cacheRead);
+    final outDetails =
+        raw['completion_tokens_details'] as Map<String, dynamic>?;
+    return LlmUsage(
+      input: max(0, promptTokens - cacheRead),
+      output: output,
+      cacheRead: cacheRead,
+      reasoning: outDetails?['reasoning_tokens'] as int? ?? 0,
+    );
   }
 
   //错误体解析：JSON 的 error.message 优先，退回原始文本片段
@@ -374,7 +440,9 @@ class LlmClient {
   }
 
   String _errorText(Object? error) {
-    if (error is Map<String, dynamic>) return error['message'] as String? ?? '未知服务端错误';
+    if (error is Map<String, dynamic>) {
+      return error['message'] as String? ?? '未知服务端错误';
+    }
     return error?.toString() ?? '未知服务端错误';
   }
 }

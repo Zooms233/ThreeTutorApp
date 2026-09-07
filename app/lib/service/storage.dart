@@ -580,6 +580,7 @@ class StorageService {
     required int input,
     required int output,
     required int cacheRead,
+    int reasoning = 0, //思考 token（混合推理模型；thinking 关闭时为 0）
   }) async {
     final root = await getRootDir();
     final file = File('${root.path}/USAGE.jsonl');
@@ -591,6 +592,7 @@ class StorageService {
       'input': input,
       'output': output,
       'cacheRead': cacheRead,
+      'reasoning': reasoning,
     });
     await file.writeAsString('$line\n', mode: FileMode.append);
   }

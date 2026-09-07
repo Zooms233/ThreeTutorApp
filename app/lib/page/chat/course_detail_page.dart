@@ -141,17 +141,20 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     return Container(
       color: Colors.white,
       margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        title: const Text('和导师的关系'),
-        trailing: const Icon(Icons.chevron_right, color: Color(0xFFC8C8C8)),
-        onTap: () {
-          Navigator.push(
-            context,
-            CupertinoPageRoute(
-              builder: (context) => RelationPage(courseName: widget.courseName),
-            ),
-          );
-        },
+      child: Material(
+        color: Colors.transparent, //ListTile 自己的 Material：水波纹不被白底 ColoredBox 吞（Flutter 断言）
+        child: ListTile(
+          title: const Text('和导师的关系'),
+          trailing: const Icon(Icons.chevron_right, color: Color(0xFFC8C8C8)),
+          onTap: () {
+            Navigator.push(
+              context,
+              CupertinoPageRoute(
+                builder: (context) => RelationPage(courseName: widget.courseName),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

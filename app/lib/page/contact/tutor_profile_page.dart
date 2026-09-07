@@ -54,23 +54,20 @@ class _TutorProfilePageState extends State<TutorProfilePage> {
       padding: const EdgeInsets.all(16),
       children: [
         _section('基本信息', _buildBasicInfo(profile)),
-        _section('性格详写', Text(profile['personality'] as String)),
+        _section('性格与动机', Text(profile['personality'] as String)),
         _section('说话风格与示例', _buildSpeech(profile)),
-        _section('情绪表现', _buildList(profile['emotions'] as List?)),
         _section('与学习者的关系', Text(profile['relation'] as String)),
       ],
     );
   }
 
-  //基本信息：性别、身份、性格关键词、外观
+  //基本信息：身份、性格关键词（gender 字段已废——不进对话，纯档案冗余）
   Widget _buildBasicInfo(Map<String, dynamic> profile) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _infoRow('性别', profile['gender']),
         _infoRow('身份', profile['identity']),
         _infoRow('性格关键词', profile['traits']),
-        _infoRow('外观', profile['appearance']),
       ],
     );
   }
@@ -84,14 +81,6 @@ class _TutorProfilePageState extends State<TutorProfilePage> {
         const SizedBox(height: 8),
         ..._buildListItems(profile['speech_examples'] as List?),
       ],
-    );
-  }
-
-  //通用：把列表内容展开为圆点前缀的文本行
-  Widget _buildList(List? items) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: _buildListItems(items),
     );
   }
 

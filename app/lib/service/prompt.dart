@@ -17,13 +17,86 @@ class PromptMessage {
   Map<String, String> toMap() => {'role': role, 'content': content};
 }
 
+const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
+
+//教材按需载入的公共工具：切节/物化/@read 解析。
+//物化与翻书回填共用同一模板与同一读盘路径——两处字节级一致是前缀命中的关键（doc/04）。
+
+//切节：节标题行到下一个同级/更高级标题行之间（含子级标题内容）；未命中返回 null
+String? readTextbookSection(String courseDir, String file, String section) {
+  final fh = File('$courseDir/TEXTBOOK/$file');
+  if (!fh.existsSync()) return null;
+  final lines = fh.readAsLinesSync();
+
+  int? start;
+  var level = 0;
+  for (var i = 0; i < lines.length; i++) {
+    if (!lines[i].trim().startsWith('#')) continue;
+    final (hashes, title) = _headingInfoOf(lines[i]);
+    if (start == null) {
+      if (title == section || title.contains(section)) {
+        start = i;
+        level = hashes;
+      }
+    } else if (hashes <= level) {
+      break; //下一个同级或更高级标题 → 本节结束
+    }
+  }
+  if (start == null) return null;
+
+  var end = lines.length;
+  for (var i = start + 1; i < lines.length; i++) {
+    if (!lines[i].trim().startsWith('#')) continue;
+    final (hashes, _) = _headingInfoOf(lines[i]);
+    if (hashes <= level) {
+      end = i;
+      break;
+    }
+  }
+  return lines.sublist(start, end).join('\n').trim();
+}
+
+//标题行 →（# 数量，标题文本）
+(int, String) _headingInfoOf(String line) {
+  final s = line.trim();
+  var n = 0;
+  var rest = s;
+  while (rest.startsWith('#')) {
+    n++;
+    rest = rest.substring(1);
+  }
+  return (n, rest.trim());
+}
+
+//教材物化模板：历史重放物化（_mapHistory）与翻书回填（service）共用——禁止两处手写
+String textbookMaterialization(String file, String section, String body) =>
+    '【教材 · $file > $section】\n$body';
+
+//物化一条：读盘→截断→模板，一条龙；未命中返回 null（重放时跳过该指针）
+String? materializeTextbookSection(
+  String courseDir,
+  String file,
+  String section,
+) {
+  final body = readTextbookSection(courseDir, file, section);
+  if (body == null) return null;
+  var trimmed = body;
+  if (trimmed.length > _textbookLimit) {
+    trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
+  }
+  return textbookMaterialization(file, section, trimmed);
+}
+
+//导师档案注入档位：full=教学/问答全量；light=聊天/群聊轻量；minimal=课后更新精简
+enum _TutorBlockLevel { full, light, minimal }
+
 class PromptBuilder {
   static const _promptsRoot = 'assets/prompts';
-  static const _textbookLimit = 8000; //教材当前节截断上限
 
   // —— 提示词资产 ——
 
-  Future<String> _prompt(String name) => rootBundle.loadString('$_promptsRoot/$name');
+  Future<String> _prompt(String name) =>
+      rootBundle.loadString('$_promptsRoot/$name');
 
   // —— 资源读取 ——
 
@@ -45,7 +118,9 @@ class PromptBuilder {
   }
 
   //课程内导师档案：完整路径 → 内容（key 用完整路径，_tutorFile 依赖它定位文件）
-  Future<Map<String, Map<String, dynamic>>> _tutorProfiles(String courseDir) async {
+  Future<Map<String, Map<String, dynamic>>> _tutorProfiles(
+    String courseDir,
+  ) async {
     final dir = Directory(courseDir);
     final profiles = <String, Map<String, dynamic>>{};
     if (!dir.existsSync()) return profiles;
@@ -63,18 +138,23 @@ class PromptBuilder {
   //身份声明：插在规则与档案之间，明确「你是哪位导师」（多档案场景防认错身份）
   String _identity(String tutorName) => '你是$tutorName。下面是你的档案：';
 
-  String _tutorBlock(Map<String, dynamic> t) {
+  //档案注入档位：教学/问答全量；聊天/群聊轻量（省性格与动机——群聊只需语气区分度）；
+  //课后更新精简（保性格与动机供 relation 演进判断，省风格示例）。
+  //聊天/群聊/更新为独立请求不命中缓存，裁剪直接省 token
+  String _tutorBlock(
+    Map<String, dynamic> t, {
+    _TutorBlockLevel level = _TutorBlockLevel.full,
+  }) {
+    final light = level == _TutorBlockLevel.light;
+    final minimal = level == _TutorBlockLevel.minimal;
     final examples = (t['speech_examples'] as List?)?.join('\n') ?? '';
-    final emotions = (t['emotions'] as List?)?.join('\n') ?? '';
     return [
       '【${t['name'] ?? ''}】',
       '身份：${t['identity'] ?? ''}',
       '性格特质：${t['traits'] ?? ''}',
-      '外貌：${t['appearance'] ?? ''}',
-      '性格与经历：${t['personality'] ?? ''}',
+      if (!light) '性格与动机：${t['personality'] ?? ''}', //轻量档省略（群聊只需语气区分度）
       '说话风格：${t['speech_style'] ?? ''}',
-      if (examples.isNotEmpty) '说话示例：\n$examples',
-      if (emotions.isNotEmpty) '情绪表达：\n$emotions',
+      if (!minimal && examples.isNotEmpty) '说话示例：\n$examples',
       '与学习者的关系：${t['relation'] ?? ''}',
     ].join('\n');
   }
@@ -83,9 +163,7 @@ class PromptBuilder {
     return [
       '【学习者】',
       '称呼：${l['name'] ?? ''}',
-      '身份：${l['identity'] ?? ''}',
       '学习动机：${l['motivation'] ?? ''}',
-      '故事：${l['story'] ?? ''}',
       if ((l['extra'] as String? ?? '').isNotEmpty) '补充：${l['extra']}',
     ].join('\n');
   }
@@ -106,12 +184,16 @@ class PromptBuilder {
     final lines = <String>[];
     for (final row in rows) {
       final records = row['records'] as List? ?? const [];
-      final latest = records.isNotEmpty ? records.last as Map<String, dynamic> : null;
+      final latest = records.isNotEmpty
+          ? records.last as Map<String, dynamic>
+          : null;
       if (latest == null) continue;
       final status = latest['status'] ?? '?';
       final date = latest['date'] ?? '';
       final mistakeText = latest['mistake'] as String?;
-      lines.add('$status ${row['name']}（最近 $date${mistakeText != null && mistakeText.isNotEmpty ? '，错因：$mistakeText' : ''}）');
+      lines.add(
+        '$status ${row['name']}（最近 $date${mistakeText != null && mistakeText.isNotEmpty ? '，错因：$mistakeText' : ''}）',
+      );
     }
     return ['【知识点进度】', ...lines].join('\n');
   }
@@ -124,20 +206,39 @@ class PromptBuilder {
 
   // —— 教材当前节（④）——
 
-  //标题行 →（# 数量，标题文本）
-  (int, String) _headingInfo(String line) {
-    final s = line.trim();
-    var n = 0;
-    var rest = s;
-    while (rest.startsWith('#')) {
-      n++;
-      rest = rest.substring(1);
+  //教材目录：全部节标题清单（@read 的寻址簿；qa 场景仅注入目录，翻书时按指针物化）
+  Future<String?> _textbookToc(String courseDir) async {
+    final dir = Directory('$courseDir/TEXTBOOK');
+    if (!dir.existsSync()) return null;
+    final files =
+        dir
+            .listSync()
+            .whereType<File>()
+            .where((e) => e.path.endsWith('.md'))
+            .toList()
+          ..sort((a, b) => a.path.compareTo(b.path));
+    if (files.isEmpty) return null;
+    final lines = <String>[];
+    for (final f in files) {
+      final name = f.uri.pathSegments.last;
+      for (final line in await f.readAsLines()) {
+        if (!line.trim().startsWith('#')) continue;
+        final (_, title) = _headingInfoOf(line);
+        if (title.isEmpty) continue;
+        lines.add('- $name > $title');
+      }
     }
-    return (n, rest.trim());
+    if (lines.isEmpty) return null;
+    return ['【教材目录】', ...lines].join('\n');
   }
 
-  //position 格式：TEXTBOOK/文件名.md > 节标题；取节标题行到下一个同级标题行之间的内容
-  Future<String?> _textbookBlock(String courseDir, Object? position) async {
+  //今日教材：当前节全文（原样注入，超长截断兜底）+ 目录（@read 寻址簿）；仅目录模式传 withBody=false
+  Future<String?> _textbookBlock(
+    String courseDir,
+    Object? position, {
+    bool withBody = true,
+  }) async {
+    if (!withBody) return _textbookToc(courseDir);
     final pos = position as String? ?? '';
     if (pos.isEmpty) return null;
     final sep = pos.indexOf(' > ');
@@ -146,53 +247,40 @@ class PromptBuilder {
     final section = pos.substring(sep + 3).trim();
     if (fileRel.isEmpty || section.isEmpty) return null;
 
-    final file = File('$courseDir/TEXTBOOK/$fileRel');
-    if (!file.existsSync()) return null;
-    final lines = await file.readAsLines();
-
-    int? start;
-    var level = 0;
-    for (var i = 0; i < lines.length; i++) {
-      if (!lines[i].trim().startsWith('#')) continue;
-      final (hashes, title) = _headingInfo(lines[i]);
-      if (start == null) {
-        if (title == section || title.contains(section)) {
-          start = i;
-          level = hashes;
-        }
-      } else if (hashes <= level) {
-        break; //下一个同级或更高级标题 → 本节结束
-      }
+    final body = readTextbookSection(courseDir, fileRel, section);
+    if (body == null) return null;
+    var trimmed = body;
+    if (trimmed.length > _textbookLimit) {
+      trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
     }
-    if (start == null) return null;
-
-    var end = lines.length;
-    for (var i = start + 1; i < lines.length; i++) {
-      if (!lines[i].trim().startsWith('#')) continue;
-      final (hashes, _) = _headingInfo(lines[i]);
-      if (hashes <= level) {
-        end = i;
-        break;
-      }
-    }
-    var body = lines.sublist(start, end).join('\n').trim();
-    if (body.length > _textbookLimit) {
-      body = '${body.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
-    }
-    return '今日教材进度：$pos\n$body';
+    final toc = await _textbookToc(courseDir);
+    return ['今日教材进度：$pos\n$trimmed', ?toc].join('\n\n');
   }
 
   // —— CHAT 历史映射 ——
 
-  //meta 行不映射；user→user（time 并入头部）、tutor→assistant，原文原样；连续 user 合并（\n）
-  //message 行映射：meta 不映射（其余字段如 auto 标记渲染/映射均忽略）
-  Future<List<PromptMessage>> _mapHistory(String chatPath) async {
+  //meta 行不映射；textbook 指针行物化为 user 消息（读盘现展开——同一指针 + 教材未改则字节级一致，
+  //前缀命中沿历史延伸）；user→user（time 并入头部）、tutor→assistant，原文原样（含 @read 行）；
+  //连续 user 合并（\n）
+  Future<List<PromptMessage>> _mapHistory(
+    String courseDir,
+    String chatPath,
+  ) async {
     final file = File(chatPath);
     if (!file.existsSync()) return [];
     final mapped = <PromptMessage>[];
     for (final line in await file.readAsLines()) {
       if (line.trim().isEmpty) continue;
       final row = jsonDecode(line) as Map<String, dynamic>;
+      if (row['type'] == 'textbook') {
+        final mat = materializeTextbookSection(
+          courseDir,
+          row['file'] as String? ?? '',
+          row['section'] as String? ?? '',
+        );
+        if (mat != null) mapped.add(PromptMessage('user', mat));
+        continue; //指针行本身不映射（物化消息替它登场）
+      }
       if (row['type'] != 'message') continue; //meta 不映射
       final isUser = row['role'] == 'user';
       var content = row['content'] as String? ?? '';
@@ -204,7 +292,10 @@ class PromptBuilder {
       }
       final role = isUser ? 'user' : 'assistant';
       if (mapped.isNotEmpty && mapped.last.role == 'user' && role == 'user') {
-        mapped[mapped.length - 1] = PromptMessage('user', '${mapped.last.content}\n$content');
+        mapped[mapped.length - 1] = PromptMessage(
+          'user',
+          '${mapped.last.content}\n$content',
+        );
       } else {
         mapped.add(PromptMessage(role, content));
       }
@@ -212,7 +303,10 @@ class PromptBuilder {
     return mapped;
   }
 
-  List<Map<String, String>> _compose(String system, List<PromptMessage> history) {
+  List<Map<String, String>> _compose(
+    String system,
+    List<PromptMessage> history,
+  ) {
     return [
       {'role': 'system', 'content': system},
       ...history.map((m) => m.toMap()),
@@ -220,7 +314,8 @@ class PromptBuilder {
   }
 
   //system 尾部拼装工具：非空段以空行连接
-  String _join(List<String?> parts) => parts.whereType<String>().where((s) => s.isNotEmpty).join('\n\n');
+  String _join(List<String?> parts) =>
+      parts.whereType<String>().where((s) => s.isNotEmpty).join('\n\n');
 
   // —— 场景拼装 ——
 
@@ -234,12 +329,15 @@ class PromptBuilder {
   }) async {
     final rule = await _prompt('teaching.md');
     final tutorFile = await _tutorFile(courseDir, tutorName);
-    final tutor = tutorFile != null ? await _readJson(tutorFile.path) : <String, dynamic>{};
+    final tutor = tutorFile != null
+        ? await _readJson(tutorFile.path)
+        : <String, dynamic>{};
     final learner = await _readJson('$courseDir/LEARNER.json');
     final state = await _readJson('$courseDir/STATE.json');
     final progress = await _readProgress('$courseDir/PROGRESS.jsonl');
     final today = DateTime.now();
-    final date = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    final date =
+        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
     final system = _join([
       rule,
@@ -251,14 +349,15 @@ class PromptBuilder {
       '今天是$date。',
       await _textbookBlock(courseDir, state['position']),
     ]);
-    final history = await _mapHistory(chatPath);
+    final history = await _mapHistory(courseDir, chatPath);
     if (dispatch != null && dispatch.isNotEmpty) {
       history.add(PromptMessage('user', dispatch));
     }
     return _compose(system, history);
   }
 
-  ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教材；不注入状态与日期。
+  ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教材目录（仅目录，
+  ///需要某节内容时 @read，成本从每轮 8k 降到几百）；不注入状态与日期。
   ///写入目标为下一课文件（新开课区间的交流段），群聊总在上一课文件尾，历史天然不含群聊。
   Future<List<Map<String, String>>> qa({
     required String courseDir,
@@ -267,7 +366,9 @@ class PromptBuilder {
   }) async {
     final rule = await _prompt('qa.md');
     final tutorFile = await _tutorFile(courseDir, tutorName);
-    final tutor = tutorFile != null ? await _readJson(tutorFile.path) : <String, dynamic>{};
+    final tutor = tutorFile != null
+        ? await _readJson(tutorFile.path)
+        : <String, dynamic>{};
     final learner = await _readJson('$courseDir/LEARNER.json');
     final state = await _readJson('$courseDir/STATE.json');
 
@@ -278,7 +379,7 @@ class PromptBuilder {
       _learnerBlock(learner),
       await _textbookBlock(courseDir, state['position']),
     ]);
-    return _compose(system, await _mapHistory(chatPath));
+    return _compose(system, await _mapHistory(courseDir, chatPath));
   }
 
   ///聊天（idle + toggle 激活）：聊天规则 + 三位导师档案；不注入状态、日期与教材。
@@ -289,16 +390,20 @@ class PromptBuilder {
   }) async {
     final rule = await _prompt('social.md');
     final profiles = await _tutorProfiles(courseDir);
-    final blocks = profiles.values.map(_tutorBlock).toList();
+    final blocks = profiles.values
+        .map((t) => _tutorBlock(t, level: _TutorBlockLevel.light))
+        .toList();
 
     final system = _join([rule, ...blocks]);
-    return _compose(system, await _mapHistory(chatPath));
+    return _compose(system, await _mapHistory(courseDir, chatPath));
   }
 
   ///「其他」字段提炼（关系页编辑入口按钮，非对话场景）：
   ///提炼规则作 system，最近课次留档全文作 user 消息。
   ///不注入导师身份/学习者档案——避免用旧 extra 与单一导师视角影响提炼。
-  Future<List<Map<String, String>>> learnerExtra({required String chatPath}) async {
+  Future<List<Map<String, String>>> learnerExtra({
+    required String chatPath,
+  }) async {
     final rule = await _prompt('learner_extra.md');
     final history = await File(chatPath).readAsString();
     return _compose(rule, [PromptMessage('user', history)]);
@@ -312,10 +417,12 @@ class PromptBuilder {
   }) async {
     final rule = await _prompt('group.md');
     final profiles = await _tutorProfiles(courseDir);
-    final blocks = profiles.values.map(_tutorBlock).toList();
+    final blocks = profiles.values
+        .map((t) => _tutorBlock(t, level: _TutorBlockLevel.light))
+        .toList();
 
     final system = _join([rule, ...blocks]);
-    final history = await _mapHistory(chatPath);
+    final history = await _mapHistory(courseDir, chatPath);
     if (dispatch != null && dispatch.isNotEmpty) {
       history.add(PromptMessage('user', dispatch));
     }
@@ -330,15 +437,17 @@ class PromptBuilder {
   }) async {
     final rule = await _prompt('update.md');
     final tutorFile = await _tutorFile(courseDir, tutorName);
-    final tutor = tutorFile != null ? await _readJson(tutorFile.path) : <String, dynamic>{};
+    final tutor = tutorFile != null
+        ? await _readJson(tutorFile.path)
+        : <String, dynamic>{};
     final progress = await _readProgress('$courseDir/PROGRESS.jsonl');
 
     final system = _join([
       rule.replaceAll('{导师名}', tutorName),
       _progressNamesBlock(progress),
-      _tutorBlock(tutor),
+      _tutorBlock(tutor, level: _TutorBlockLevel.minimal),
     ]);
-    return _compose(system, await _mapHistory(chatPath));
+    return _compose(system, await _mapHistory(courseDir, chatPath));
   }
 
   //按档案内 name 字段定位课程内档案文件（tutor_a/b/c.json）

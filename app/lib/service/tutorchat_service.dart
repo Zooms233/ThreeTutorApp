@@ -61,6 +61,43 @@ class TutorChatService {
   Future<String> _courseDir(String courseName) async =>
       (await _storage.getCourseDir(courseName)).path;
 
+  // —— 群聊重新生成（独立入口：不依赖下课链，可单独触发/验证） ——
+
+  //定位最新 ended 课次（群聊归属于已下课的课次；从最新往回找）
+  Future<String?> _latestEndedLessonPath(String courseName) async {
+    final files = await _storage.listChatFiles(courseName);
+    for (final path in files.reversed) {
+      final meta =
+          jsonDecode((await File(path).readAsLines()).first)
+              as Map<String, dynamic>;
+      if (meta['status'] == 'ended') return path;
+    }
+    return null;
+  }
+
+  ///清空最新 ended 课次的既有群聊：文件重写过滤 auto 行（破坏性操作，调用方需确认）；
+  ///返回是否找到 ended 课次
+  Future<bool> clearGroupChat({required String courseName}) async {
+    final path = await _latestEndedLessonPath(courseName);
+    if (path == null) return false;
+    final kept = (await File(path).readAsLines())
+        .where((line) => line.trim().isEmpty || !line.contains('"auto":true'))
+        .toList();
+    await File(path).writeAsString(kept.join('\n'));
+    return true;
+  }
+
+  ///重新生成最新 ended 课次的群聊（调用方先 clearGroupChat）：逐条落档 + 回调上屏
+  Future<void> regenerateGroupChat({
+    required String courseName,
+    void Function(Map<String, dynamic> message)? onMessage,
+  }) async {
+    final path = await _latestEndedLessonPath(courseName);
+    if (path == null) throw LlmException('没有已结束的课次，无群聊可生成');
+    final courseDir = await _courseDir(courseName);
+    await _generateGroupChat(courseDir, path, path, onMessage: onMessage);
+  }
+
   // —— token 用量入账 ——
   //统一对话出口：透传协议层；成功后把 usage 追加进数据根 USAGE.jsonl。设置页「用量统计」
   //现读该账本聚合展示，账本文件即唯一事实。失败重试的中间请求拿不到 usage，无法入账
@@ -72,6 +109,8 @@ class TutorChatService {
     required List<Map<String, String>> messages,
     bool jsonMode = false,
     bool stream = true,
+    int? maxTokens, //JSON 场景防截断
+    String? thinkingEffort, //思考档位透传（更新/群聊用 'low'：保指令遵循，砍思考量）
     void Function(String delta)? onDelta,
     String? label,
   }) async {
@@ -80,6 +119,8 @@ class TutorChatService {
       messages: messages,
       jsonMode: jsonMode,
       stream: stream,
+      maxTokens: maxTokens,
+      thinkingEffort: thinkingEffort,
       onDelta: onDelta,
       label: label,
     );
@@ -95,6 +136,7 @@ class TutorChatService {
               input: u.input,
               output: u.output,
               cacheRead: u.cacheRead,
+              reasoning: u.reasoning,
             )
             .catchError((Object _) {}),
       );
@@ -370,9 +412,10 @@ class TutorChatService {
       await _storage.patchChatMeta(path, {'status': 'ongoing'});
 
       final courseDir = await _courseDir(courseName);
-      final dispatch = await rootBundle.loadString(
+      //占位符替换：dispatch_greeting.md 内的 {导师名} 填入本课导师（与 update.md 规则同规则）
+      final dispatch = (await rootBundle.loadString(
         'assets/prompts/dispatch_greeting.md',
-      );
+      )).replaceAll('{导师名}', tutor);
       final messages = await _prompts.teaching(
         courseDir: courseDir,
         chatPath: path,
@@ -473,6 +516,7 @@ class TutorChatService {
         chatPath: lessonPath,
         tutorName: tutorName,
       );
+      _setBusy(courseName, '整理课程进度中…'); //更新环节的状态文案（区别于总结/群聊）
       final result = await _chatLogged(
         course: courseName,
         lessonPath: lessonPath,
@@ -480,6 +524,8 @@ class TutorChatService {
         messages: messages,
         stream: false,
         jsonMode: true,
+        maxTokens: 4096, //防 JSON 截断
+        thinkingEffort: 'low', //格式化 JSON 生成用低强度思考（disabled 会复读指令不执行）
         label: '更新',
       );
       try {

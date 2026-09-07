@@ -247,6 +247,59 @@ class _GroupChatPageState extends State<GroupChatPage> {
     _scrollToBottom();
   }
 
+  //重新生成群聊（临时测试入口）：确认 → 清旧 auto 行并刷新 → busy → 逐条弹出新生成；
+  //结束后 busy 清除由 finally 负责（busyVersion 触发重绘 + 全量重载，无需手动）
+  Future<void> _regenerateGroupChat() async {
+    if (_busy) {
+      _toast('上一条生成还未完成，请稍候');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('重新生成群聊'),
+        content: const Text('将删除现有群聊并重新生成（覆盖式，不影响教学对话与进度）。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('重新生成'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    TutorChatService.setBusyForCourse(widget.courseName, '群里正在聊天…');
+    try {
+      final cleared = await _service.clearGroupChat(courseName: widget.courseName);
+      if (!cleared || !mounted) {
+        _toast('没有已结束的课次');
+        return;
+      }
+      await _reload(); //旧群聊从屏幕消失
+      await _service.regenerateGroupChat(
+        courseName: widget.courseName,
+        onMessage: (m) {
+          if (!mounted) return;
+          setState(() {
+            _entries = [..._entries, m];
+            _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+          });
+          _scrollToBottom();
+        },
+      );
+      _toast('群聊已重新生成');
+    } on LlmException catch (e) {
+      if (!mounted) return;
+      _toast('群聊生成失败：$e');
+    } finally {
+      TutorChatService.setBusyForCourse(widget.courseName, '');
+    }
+  }
+
   //课程详情页按钮 pop 意图处理：start=开始上课（问候）/ end=今天就到这里（总结+课后更新）
   Future<void> _handleLessonAction(String action) async {
     if (_busy) {
@@ -445,6 +498,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 onPressed: () => setState(() => _socialMode = !_socialMode),
               ),
             IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: '重新生成群聊（临时测试）',
+              //存在 ended 课次即可重生成（lessons≥1 ⇔ 有已结束课次；最新课次可能是 idle）
+              onPressed: _lessons >= 1 ? _regenerateGroupChat : null,
+            ),
+            IconButton(
               icon: const Icon(Icons.query_stats),
               tooltip: '课程详情',
               onPressed: () async {
@@ -477,17 +536,20 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   Widget _buildMessageList() {
-    return ListView.builder(
-      controller: _scrollController,
-      reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      itemCount: _items.length,
-      itemBuilder: (context, index) {
-        final item = _items[index];
-        return item.text != null
-            ? _buildDivider(item.text!)
-            : _buildMessage(item.message!);
-      },
+    //SelectionArea：消息可长按选择复制（LaTeX 等自绘部分不可选，正文可选）
+    return SelectionArea(
+      child: ListView.builder(
+        controller: _scrollController,
+        reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemCount: _items.length,
+        itemBuilder: (context, index) {
+          final item = _items[index];
+          return item.text != null
+              ? _buildDivider(item.text!)
+              : _buildMessage(item.message!);
+        },
+      ),
     );
   }
 
