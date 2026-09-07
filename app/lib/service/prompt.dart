@@ -295,6 +295,15 @@ class PromptBuilder {
     return _compose(system, await _mapHistory(chatPath));
   }
 
+  ///「其他」字段提炼（关系页编辑入口按钮，非对话场景）：
+  ///提炼规则作 system，最近课次留档全文作 user 消息。
+  ///不注入导师身份/学习者档案——避免用旧 extra 与单一导师视角影响提炼。
+  Future<List<Map<String, String>>> learnerExtra({required String chatPath}) async {
+    final rule = await _prompt('learner_extra.md');
+    final history = await File(chatPath).readAsString();
+    return _compose(rule, [PromptMessage('user', history)]);
+  }
+
   ///导师群聊生成（课后更新完成后自动）：群聊规范 + 三位导师档案 + 本课对话 + 调度指令。
   Future<List<Map<String, String>>> groupChat({
     required String courseDir,

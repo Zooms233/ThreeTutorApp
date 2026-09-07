@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:tutor_chat/page/usage_page.dart';
 import 'package:tutor_chat/service/llm_client.dart';
 import 'package:tutor_chat/service/storage.dart';
 
@@ -56,6 +57,7 @@ class _TabSettingState extends State<TabSetting> {
               children: [
                 // _buildHeatmap(), //热力图暂缓
                 _buildApiSummary(), //当前 API 配置摘要（点击进入配置对话框）
+                _buildUsageEntry(), //用量统计入口（往期课程 token 消耗）
                 const SizedBox(height: 32),
                 const Center(
                   //与 pubspec version 同步（引入 package_info 前先硬编码）
@@ -322,6 +324,25 @@ class _TabSettingState extends State<TabSetting> {
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: _showApiConfigDialog,
+      ),
+    );
+  }
+
+  //用量统计入口卡：往期课程 token 消耗（输入/输出/缓存命中），点击进入统计页；
+  //margin 顶部为 0——紧贴上方摘要卡，两卡视觉上成一组
+  Widget _buildUsageEntry() {
+    return Container(
+      color: Colors.white,
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: ListTile(
+        leading: const Icon(Icons.insights_outlined),
+        title: const Text('用量统计'),
+        subtitle: const Text('往期课程的 token 消耗与缓存命中'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const UsagePage()),
+        ),
       ),
     );
   }

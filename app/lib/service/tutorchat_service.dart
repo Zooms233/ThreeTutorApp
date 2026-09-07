@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -46,6 +47,65 @@ class TutorChatService {
   Future<LlmConfig> _config() async => LlmConfig.fromMap(await _storage.loadConfig());
 
   Future<String> _courseDir(String courseName) async => (await _storage.getCourseDir(courseName)).path;
+
+  // —— token 用量入账 ——
+  //统一对话出口：透传协议层；成功后把 usage 追加进数据根 USAGE.jsonl。设置页「用量统计」
+  //现读该账本聚合展示，账本文件即唯一事实。失败重试的中间请求拿不到 usage，无法入账
+  //（账本只记成功请求）；连通性检验（ping）也不计。
+  Future<LlmResult> _chatLogged({
+    required String course,
+    String? lessonPath,
+    required String scene,
+    required List<Map<String, String>> messages,
+    bool jsonMode = false,
+    bool stream = true,
+    void Function(String delta)? onDelta,
+    String? label,
+  }) async {
+    final result = await _client.chat(
+      config: await _config(),
+      messages: messages,
+      jsonMode: jsonMode,
+      stream: stream,
+      onDelta: onDelta,
+      label: label,
+    );
+    final u = result.usage;
+    if (u != null) {
+      //fire-and-forget：不阻塞对话主流程；写账失败静默（账本非关键路径）
+      unawaited(
+        _storage
+            .appendUsage(
+              course: course,
+              lesson: lessonPath?.split(RegExp(r'[/\\]')).last,
+              scene: scene,
+              input: u.input,
+              output: u.output,
+              cacheRead: u.cacheRead,
+            )
+            .catchError((Object _) {}),
+      );
+    }
+    return result;
+  }
+
+  ///「其他」字段提炼（关系页编辑入口）：读最新课次留档全文 → LLM 提炼 → 返回草稿文本。
+  ///只预填不落盘（UI 把关后随保存写入）；无课次记录返回 null（调用方提示）。
+  Future<String?> extractLearnerExtra({required String courseName}) async {
+    final files = await _storage.listChatFiles(courseName);
+    if (files.isEmpty) return null;
+    final path = files.last;
+    final messages = await _prompts.learnerExtra(chatPath: path);
+    final result = await _chatLogged(
+      course: courseName,
+      lessonPath: path,
+      scene: '提炼',
+      messages: messages,
+      stream: false,
+      label: '提炼',
+    );
+    return result.text.trim();
+  }
 
   String _today() {
     final n = DateTime.now();
@@ -191,8 +251,10 @@ class TutorChatService {
           ? await _prompts.social(courseDir: courseDir, chatPath: path)
           : await _prompts.qa(courseDir: courseDir, chatPath: path, tutorName: responder);
 
-      final result = await _client.chat(
-        config: await _config(),
+      final result = await _chatLogged(
+        course: courseName,
+        lessonPath: path,
+        scene: social ? '闲聊' : '问答',
         messages: messages,
         stream: true,
         label: social ? '闲聊' : '问答',
@@ -229,8 +291,10 @@ class TutorChatService {
       await _appendUser(path, userName, content, 'teaching');
       final courseDir = await _courseDir(courseName);
       final messages = await _prompts.teaching(courseDir: courseDir, chatPath: path, tutorName: tutor);
-      final result = await _client.chat(
-        config: await _config(),
+      final result = await _chatLogged(
+        course: courseName,
+        lessonPath: path,
+        scene: '上课',
         messages: messages,
         stream: true,
         label: '上课',
@@ -262,8 +326,10 @@ class TutorChatService {
         tutorName: tutor,
         dispatch: dispatch,
       );
-      final result = await _client.chat(
-        config: await _config(),
+      final result = await _chatLogged(
+        course: courseName,
+        lessonPath: path,
+        scene: '问候',
         messages: messages,
         stream: true,
         label: '问候',
@@ -301,8 +367,10 @@ class TutorChatService {
         tutorName: tutor,
         dispatch: dispatch,
       );
-      final result = await _client.chat(
-        config: await _config(),
+      final result = await _chatLogged(
+        course: courseName,
+        lessonPath: path,
+        scene: '总结',
         messages: messages,
         stream: true,
         label: '总结',
@@ -347,8 +415,10 @@ class TutorChatService {
     for (var attempt = 0; attempt < 2; attempt++) {
       final messages =
           await _prompts.update(courseDir: courseDir, chatPath: lessonPath, tutorName: tutorName);
-      final result = await _client.chat(
-        config: await _config(),
+      final result = await _chatLogged(
+        course: courseName,
+        lessonPath: lessonPath,
+        scene: '更新',
         messages: messages,
         stream: false,
         jsonMode: true,
@@ -475,8 +545,11 @@ class TutorChatService {
       });
     }
 
-    await _client.chat(
-      config: await _config(),
+    await _chatLogged(
+      //courseDir 的 basename 即课程名（_courseDir 由课程名拼接生成）
+      course: courseDir.split(RegExp(r'[/\\]')).last,
+      lessonPath: chatPath,
+      scene: '群聊',
       messages: messages,
       stream: true,
       label: '群聊',

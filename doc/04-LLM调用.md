@@ -86,9 +86,21 @@ JSON 提取：剥离 ```json 围栏 → `jsonDecode`；失败则整请求重试 
 - 连通性检验 `ping`：设置页专用，最小请求（`max_tokens=1`，非流式，15s 超时）验证配置；返回 (成功, 描述)；不计入 usage 调试累计
 - 字段：model、stream=true（仅课后更新非流式）、messages、stream_options=`{"include_usage": true}`（仅流式）、response_format=`{"type":"json_object"}`（仅课后更新）
 - 本项目参数：最多 3 次尝试（408/409/429/5xx/网络异常可重试，退避按 pi 规则）；连接与响应头超时 30s；流式无新数据 120s 判死（按断流处理，已收内容丢弃进重试）
-- usage 兼容链：cacheRead = `prompt_tokens_details.cached_tokens` ?? `prompt_cache_hit_tokens`（DeepSeek）?? `cached_tokens`；input = prompt_tokens − cacheRead；仅 stdout 调试输出，不写入 CHAT（每次请求成功后打印 `[llm 场景]` 行：入/命中/写入/出/命中率/耗时 + 会话累计，场景标签：问答/闲聊/上课/问候/总结/更新/群聊）。验收：课堂第 2 轮起 cacheRead ≈ system + 历史长度
+- usage 兼容链：cacheRead = `prompt_tokens_details.cached_tokens` ?? `prompt_cache_hit_tokens`（DeepSeek）?? `cached_tokens`；input = prompt_tokens − cacheRead；每次成功请求后：① stdout 调试行 `[llm 场景]`（入/命中/写入/出/命中率/耗时 + 会话累计）② 追加一行进数据根 **USAGE.jsonl 账本**（见下）。验收：课堂第 2 轮起 cacheRead ≈ system + 历史长度
+
+### 用量账本（USAGE.jsonl）
+
+位置：数据根（与 CONFIG.json 同级），逐行 JSON 追加写；对话档案（CHAT/）不掺账目数据。
+
+```json
+{"time":"2026-02-11T20:31:05","course":"细胞生物学","lesson":"lesson-003.jsonl","scene":"上课","input":320,"output":1500,"cacheRead":1792}
+```
+
+- 写入点：service 层统一对话出口（含「提炼」工具场景，共七场景）透传后取 `result.usage` 入账，fire-and-forget 不阻塞主流程，写账失败静默）；失败重试的中间请求拿不到 usage，无法入账——**账本只记成功请求**；ping 检验不计
+- lesson = 课次留档文件名（无课次上下文为 null）；input = 未命中（计费且写入缓存）、cacheRead = 命中（约 1/10 计价）、output = completion_tokens
+- 消费方：设置页「用量统计」现读现算不缓存（账本文件即唯一事实），允许手工编辑（坏行跳过）
 - 发送前清理孤立 Unicode 代理对（防 400）
 
 ## 后续扩展
 
-超长历史裁剪（pi compaction）、流式打字机渲染、usage 成本曲线——本期不做。
+超长历史裁剪（pi compaction）、流式打字机渲染——本期不做；usage 成本曲线以 USAGE.jsonl 账本为数据源，后续可做。

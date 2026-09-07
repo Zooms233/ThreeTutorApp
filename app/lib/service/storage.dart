@@ -432,6 +432,26 @@ class StorageService {
     return jsonDecode(await file.readAsString()) as Map<String, dynamic>;
   }
 
+  //更新学习者档案的三个可编辑字段（关系页编辑入口）：
+  //只覆盖 name/motivation/extra，identity/story 是世界档案固有，物理上碰不到；
+  //prompt 每次请求现读本文件，保存后下一句话即生效，无迁移问题
+  Future<void> saveLearnerFields(
+    String courseName, {
+    required String name,
+    required String motivation,
+    required String extra,
+  }) async {
+    final courseDir = await getCourseDir(courseName);
+    final file = File('${courseDir.path}/LEARNER.json');
+    final learner = file.existsSync()
+        ? jsonDecode(await file.readAsString()) as Map<String, dynamic>
+        : <String, dynamic>{};
+    learner['name'] = name;
+    learner['motivation'] = motivation;
+    learner['extra'] = extra;
+    await file.writeAsString(jsonEncode(learner));
+  }
+
   //读取课程内导师与学习者的关系（tutor_*.json 的 name + relation，按文件名 tutor_a→b→c）
   Future<List<Map<String, dynamic>>> loadCourseTutorRelations(
     String courseName,
@@ -547,6 +567,48 @@ class StorageService {
     final root = await getRootDir();
     final file = File('${root.path}/CONFIG.json');
     await file.writeAsString(jsonEncode(config));
+  }
+
+  // —— token 用量账本（USAGE.jsonl，与 CONFIG 同级；对话档案不掺账目数据）——
+
+  //追加一行用量记录：{time, course, lesson, scene, input, output, cacheRead}
+  //input = 缓存未命中输入（计费且写入缓存），cacheRead = 缓存命中输入（约 1/10 计价）
+  Future<void> appendUsage({
+    required String course,
+    String? lesson, //课次留档文件名；无课次上下文的调用为 null
+    required String scene,
+    required int input,
+    required int output,
+    required int cacheRead,
+  }) async {
+    final root = await getRootDir();
+    final file = File('${root.path}/USAGE.jsonl');
+    final line = jsonEncode({
+      'time': DateTime.now().toIso8601String(),
+      'course': course,
+      'lesson': lesson,
+      'scene': scene,
+      'input': input,
+      'output': output,
+      'cacheRead': cacheRead,
+    });
+    await file.writeAsString('$line\n', mode: FileMode.append);
+  }
+
+  //读取全部用量记录（坏行跳过——账本允许手工编辑，容错优先）；页面现读现算不缓存
+  Future<List<Map<String, dynamic>>> readUsageLog() async {
+    final root = await getRootDir();
+    final file = File('${root.path}/USAGE.jsonl');
+    if (!file.existsSync()) return [];
+    final rows = <Map<String, dynamic>>[];
+    for (final line in await file.readAsLines()) {
+      if (line.trim().isEmpty) continue;
+      try {
+        rows.add(jsonDecode(line) as Map<String, dynamic>);
+      } catch (_) {//坏行跳过
+      }
+    }
+    return rows;
   }
 
   //导入单个内置世界：从 assets/worlds/<name>/ 复制档案到应用目录
