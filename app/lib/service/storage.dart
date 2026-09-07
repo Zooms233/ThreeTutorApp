@@ -43,6 +43,7 @@ class StorageService {
 
     final names = <String>[];
     for (final entity in await worldDir.list().toList()) {
+      if (entity is! Directory) continue; //只收子目录，混入的散文件不算世界
       //从完整路径中取出最后一段，即世界名：...\世界\教令院 → 教令院
       names.add(entity.path.split(Platform.pathSeparator).last);
     }
@@ -139,48 +140,60 @@ class StorageService {
   }) async {
     final courseDir = await getCourseDir(courseName);
     if (courseDir.existsSync()) return '同名课程已存在';
-    await courseDir.create(recursive: true);
-    await Directory('${courseDir.path}/CHAT').create(); //课次留档目录
 
-    //拷贝导师档案（平铺）
-    final worldDir = await getWorldDir(worldName);
-    for (final entity in worldDir.listSync()) {
-      final fileName = entity.path.split(Platform.pathSeparator).last;
-      if (entity is File && fileName.startsWith('tutor_') && fileName.endsWith('.json')) {
-        await entity.copy('${courseDir.path}/$fileName');
+    try {
+      await courseDir.create(recursive: true);
+      await Directory('${courseDir.path}/CHAT').create(); //课次留档目录
+
+      //拷贝导师档案（平铺）
+      final worldDir = await getWorldDir(worldName);
+      for (final entity in worldDir.listSync()) {
+        final fileName = entity.path.split(Platform.pathSeparator).last;
+        if (entity is File && fileName.startsWith('tutor_') && fileName.endsWith('.json')) {
+          await entity.copy('${courseDir.path}/$fileName');
+        }
       }
+
+      //学习者档案：创建课程时直接生成（世界不再内置 LEARNER.json）
+      await File('${courseDir.path}/LEARNER.json').writeAsString(
+        jsonEncode({
+          'name': learnerName,
+          'motivation': motivation,
+          'extra': extra,
+        }),
+      );
+
+      //STATE 初值：从 tutor_a 开始轮换，课程名仅记目录名不写入
+      final firstTutor = jsonDecode(
+        await File('${courseDir.path}/tutor_a.json').readAsString(),
+      ) as Map<String, dynamic>;
+      await File('${courseDir.path}/STATE.json').writeAsString(
+        jsonEncode({
+          'position': '', //无教材模式为空
+          'next_tutor': firstTutor['name'],
+          'lessons': 0,
+          'last_date': '', //尚未上课
+        }),
+      );
+
+      //教材（可选）：复制进课程 TEXTBOOK/ 目录
+      if (textbookPath != null) {
+        final textbookDir = Directory('${courseDir.path}/TEXTBOOK');
+        await textbookDir.create();
+        final name = textbookPath.split(Platform.pathSeparator).last;
+        await File(textbookPath).copy('${textbookDir.path}/$name');
+      }
+      return null;
+    } catch (e) {
+      //任一步失败：删掉半成品目录（拷贝/写档中断的残留），错误原因交调用方提示
+      if (courseDir.existsSync()) {
+        try {
+          await courseDir.delete(recursive: true);
+        } catch (_) {//清理失败不掩盖原始错误
+        }
+      }
+      return '创建失败：$e';
     }
-
-    //学习者档案：创建课程时直接生成（世界不再内置 LEARNER.json）
-    await File('${courseDir.path}/LEARNER.json').writeAsString(
-      jsonEncode({
-        'name': learnerName,
-        'motivation': motivation,
-        'extra': extra,
-      }),
-    );
-
-    //STATE 初值：从 tutor_a 开始轮换，课程名仅记目录名不写入
-    final firstTutor = jsonDecode(
-      await File('${courseDir.path}/tutor_a.json').readAsString(),
-    ) as Map<String, dynamic>;
-    await File('${courseDir.path}/STATE.json').writeAsString(
-      jsonEncode({
-        'position': '', //无教材模式为空
-        'next_tutor': firstTutor['name'],
-        'lessons': 0,
-        'last_date': '', //尚未上课
-      }),
-    );
-
-    //教材（可选）：复制进课程 TEXTBOOK/ 目录
-    if (textbookPath != null) {
-      final textbookDir = Directory('${courseDir.path}/TEXTBOOK');
-      await textbookDir.create();
-      final name = textbookPath.split(Platform.pathSeparator).last;
-      await File(textbookPath).copy('${textbookDir.path}/$name');
-    }
-    return null;
   }
 
   //会话列表数据：每课程一行（群名/日期/预览）
@@ -365,7 +378,7 @@ class StorageService {
     };
   }
 
-  //开启新课次：建榃档写 meta（status=idle 预填；文件已存在则幂等返回既有）
+  //开启新课次：建档写 meta（status=idle 预填；文件已存在则幂等返回既有）
   //lesson = 累计课时 + 1，tutor = STATE.next_tutor（轮换推进在课后更新，此处只取）
   Future<Map<String, dynamic>> startNewLesson(String courseName) async {
     final state = await loadCourseState(courseName);

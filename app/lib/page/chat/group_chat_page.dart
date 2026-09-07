@@ -191,60 +191,70 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   //发送消息：judgeFlow 判定三态 → 走对应服务方法（先写后说由服务层完成）
+  //入口即占 busy（通用文案，service 端拿到导师名后细化）：关闭判定期间连发两条、
+  //并发写同一文件的竞态窗口；判定本身抛异常也由 finally 释放
   //失败时用户消息已留档（悬空），输入框解锁，重发时连续合并消化
   Future<void> _sendMessage() async {
     final text = _inputController.text.trim();
     if (text.isEmpty || _busy) return;
     _inputController.clear();
 
-    //三态判定：idle+未上过课 → 问答；idle+toggle 激活 → 群聊讨论；ongoing → 上课对话
-    final flow = await _service.judgeFlow(
-      widget.courseName,
-      toggleActive: _socialMode,
-    );
-    //lesson/tutorName 不再在此使用：忙碌文案由 service 端各场景方法内部设置
-    final social = flow == 'social';
-    final phase = social ? 'social' : (flow == 'teaching' ? 'teaching' : 'qa');
-
-    //乐观更新（optimistic update）：不等生成结果，先假定发送成功让消息立即上屏
-    //（服务层此刻正把它写入文件，界面不重复落档）；若生成失败，
-    //末尾 _reload 从文件重载校正，toast 提示重发
-    final userMessage = {
-      'type': 'message',
-      'phase': phase,
-      'role': 'user',
-      'name': _learnerName,
-      'time': _now(),
-      'content': text,
-    };
-    if (!mounted) return;
-    setState(() {
-      _entries = [..._entries, userMessage];
-      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
-      //忙碌文案由 service._setBusy 统一设置，busyVersion 监听器触发重绘
-    });
-    _scrollToBottom();
-
+    TutorChatService.setBusyForCourse(widget.courseName, '正在输入中…');
     try {
-      await (flow == 'teaching'
-          ? _service.sendLessonMessage(
-              courseName: widget.courseName,
-              content: text,
-            )
-          : _service.sendUserMessage(
-              courseName: widget.courseName,
-              content: text,
-              social: social,
-            ));
-    } on LlmException catch (e) {
+      //三态判定：idle+未上过课 → 问答；idle+toggle 激活 → 群聊讨论；ongoing → 上课对话
+      final flow = await _service.judgeFlow(
+        widget.courseName,
+        toggleActive: _socialMode,
+      );
+      //lesson/tutorName 不再在此使用：忙碌文案由 service 端各场景方法内部设置
+      final social = flow == 'social';
+      final phase = social
+          ? 'social'
+          : (flow == 'teaching' ? 'teaching' : 'qa');
+
+      //乐观更新（optimistic update）：不等生成结果，先假定发送成功让消息立即上屏
+      //（服务层此刻正把它写入文件，界面不重复落档）；若生成失败，
+      //末尾 _reload 从文件重载校正，toast 提示重发
+      final userMessage = {
+        'type': 'message',
+        'phase': phase,
+        'role': 'user',
+        'name': _learnerName,
+        'time': _now(),
+        'content': text,
+      };
       if (!mounted) return;
-      _toast('发送失败：$e\n消息已保留，重新发送即可');
+      setState(() {
+        _entries = [..._entries, userMessage];
+        _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+        //忙碌文案由 service._setBusy 统一设置，busyVersion 监听器触发重绘
+      });
+      _scrollToBottom();
+
+      try {
+        await (flow == 'teaching'
+            ? _service.sendLessonMessage(
+                courseName: widget.courseName,
+                content: text,
+              )
+            : _service.sendUserMessage(
+                courseName: widget.courseName,
+                content: text,
+                social: social,
+              ));
+      } on LlmException catch (e) {
+        if (!mounted) return;
+        _toast('发送失败：$e\n消息已保留，重新发送即可');
+      }
+      //无论成败都从文件重载：成功同步回复；失败同步悬空消息（含课次分隔行）；再解锁输入框
+      //（busy 清除由 service 端 finally 统一负责，busyVersion 监听器触发重绘）
+      if (!mounted) return;
+      await _reload();
+      _scrollToBottom();
+    } finally {
+      //正常路径由 service 端 finally 清；此处兜底判定阶段异常（_setBusy 幂等，重清无害）
+      TutorChatService.setBusyForCourse(widget.courseName, '');
     }
-    //无论成败都从文件重载：成功同步回复；失败同步悬空消息（含课次分隔行）；再解锁输入框
-    //（busy 清除由 service 端 finally 统一负责，busyVersion 监听器触发重绘）
-    if (!mounted) return;
-    await _reload();
-    _scrollToBottom();
   }
 
   //重新生成群聊（临时测试入口）：确认 → 清旧 auto 行并刷新 → busy → 逐条弹出新生成；
@@ -274,7 +284,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
     if (confirmed != true || !mounted) return;
     TutorChatService.setBusyForCourse(widget.courseName, '群里正在聊天…');
     try {
-      final cleared = await _service.clearGroupChat(courseName: widget.courseName);
+      final cleared = await _service.clearGroupChat(
+        courseName: widget.courseName,
+      );
       if (!cleared || !mounted) {
         _toast('没有已结束的课次');
         return;
@@ -322,6 +334,10 @@ class _GroupChatPageState extends State<GroupChatPage> {
         //问候失败：meta 保持 ongoing，用户直接发消息即走上课对话自然恢复
         if (!mounted) return;
         _toast('问候生成失败：$e\n可直接发消息继续上课');
+      } catch (e) {
+        //兜底：非 LlmException 的异常同样要可见（否则会静默失败：无 toast/无重载）
+        if (!mounted) return;
+        _toast('问候处理异常：$e\n可直接发消息继续上课');
       }
     } else {
       //action == 'end'：下课总结 → 课后更新 → 群聊生成（三段请求，全程锁定输入框）
@@ -356,6 +372,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
         //总结或更新失败：meta 保持 ongoing，按钮仍为「今天就到这里」，重新点击即重跑
         if (!mounted) return;
         _toast('下课总结失败：$e\n可重新点击「今天就到这里」重试');
+      } catch (e) {
+        //兜底：非 LlmException 的异常同样要可见，且继续走 reload（此前会静默：无 toast/
+        //无重载/按钮不变——2026-09-08 遗传学「更新请求静默失败」即此路径）
+        if (!mounted) return;
+        _toast('下课处理异常：$e\n可重新点击「今天就到这里」重试');
       }
     }
     if (!mounted) return;

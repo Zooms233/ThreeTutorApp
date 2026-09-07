@@ -199,7 +199,7 @@ class TutorChatService {
     'content': content,
   });
 
-  //social 落档目标：上一课文件尾（群聊讨论段）；不足两课时兕底最新文件
+  //social 落档目标：上一课文件尾（群聊讨论段）；不足两课时兜底最新文件
   Future<String> _socialTargetFile(String courseName) async {
     final files = await _storage.listChatFiles(courseName);
     return files.length >= 2 ? files[files.length - 2] : files.last;
@@ -306,17 +306,20 @@ class TutorChatService {
     required String content,
     required bool social,
   }) async {
-    //落档目标：qa 写最新课次文件（下一课区间的交流段）；social 写上一课文件尾（群聊讨论段）
-    final path = social
-        ? await _socialTargetFile(courseName)
-        : (await _storage.getCurrentLesson(courseName))['path'] as String;
-    final meta =
-        jsonDecode((await File(path).readAsLines()).first)
-            as Map<String, dynamic>;
-    final responder =
-        meta['tutor'] as String? ?? '导师'; //问答=next_tutor；聊天前缀未命中时的回退
-    _setBusy(courseName, social ? '群里正在输入中…' : '$responder 正在输入中…'); //跨页面生成中状态
+    //入口即占 busy：定位文件/读 meta 等准备期间输入框已锁（页面可能先占通用文案，
+    //此处细化），杜绝判定窗口内连发两条导致的并发写同一文件
+    _setBusy(courseName, social ? '群里正在输入中…' : '正在输入中…');
     try {
+      //落档目标：qa 写最新课次文件（下一课区间的交流段）；social 写上一课文件尾（群聊讨论段）
+      final path = social
+          ? await _socialTargetFile(courseName)
+          : (await _storage.getCurrentLesson(courseName))['path'] as String;
+      final meta =
+          jsonDecode((await File(path).readAsLines()).first)
+              as Map<String, dynamic>;
+      final responder =
+          meta['tutor'] as String? ?? '导师'; //问答=next_tutor；聊天前缀未命中时的回退
+      if (!social) _setBusy(courseName, '$responder 正在输入中…'); //拿到导师名后细化文案
       final learner = await _storage.loadCourseLearner(courseName);
       final userName = learner['name'] as String? ?? '学习者';
       final phase = social ? 'social' : 'qa';
@@ -363,17 +366,18 @@ class TutorChatService {
     required String courseName,
     required String content,
   }) async {
-    final lesson = await _storage.getCurrentLesson(courseName);
-    final path = lesson['path'] as String;
-    final meta =
-        jsonDecode((await File(path).readAsLines()).first)
-            as Map<String, dynamic>;
-    if (meta['status'] != 'ongoing') {
-      throw LlmException('非上课状态（meta=${meta['status']}），无法走上课对话');
-    }
-    final tutor = meta['tutor'] as String? ?? '导师';
-    _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态
+    _setBusy(courseName, '正在输入中…'); //入口即占 busy（校验期间锁输入框）
     try {
+      final lesson = await _storage.getCurrentLesson(courseName);
+      final path = lesson['path'] as String;
+      final meta =
+          jsonDecode((await File(path).readAsLines()).first)
+              as Map<String, dynamic>;
+      if (meta['status'] != 'ongoing') {
+        throw LlmException('非上课状态（meta=${meta['status']}），无法走上课对话');
+      }
+      final tutor = meta['tutor'] as String? ?? '导师';
+      _setBusy(courseName, '$tutor 正在输入中…'); //拿到导师名后细化文案
       final learner = await _storage.loadCourseLearner(courseName);
       final userName = learner['name'] as String? ?? '学习者';
 
@@ -606,6 +610,16 @@ class TutorChatService {
         });
       }
     }
+    //写回前按每行最新状态块的日期排序（旧→新）：loadCourseProgress 返回的是
+    //UI 序（新在前），直接写回会让文件行序逐轮翻转、显示顺序错乱；
+    //按日期归位保证文件恒时间正序，load 后 reversed 恒新在前（顺带修复历史乱序）
+    String latestDate(Map<String, dynamic> row) {
+      final records = row['records'] as List? ?? const [];
+      if (records.isEmpty) return '';
+      return (records.last as Map<String, dynamic>)['date'] as String? ?? '';
+    }
+
+    rows.sort((a, b) => latestDate(a).compareTo(latestDate(b)));
     final progressText = rows.map(jsonEncode).join('\n');
     await File('$courseDir/PROGRESS.jsonl').writeAsString('$progressText\n');
 

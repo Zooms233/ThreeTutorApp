@@ -35,7 +35,7 @@ class LlmConfig {
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1); //尾斜杠归一化
     }
-    //用户误填完整端点时防重复拼接（设置页输入侧已实时裁剪，此处兕底手改 CONFIG 场景）
+    //用户误填完整端点时防重复拼接（设置页输入侧已实时裁剪，此处兜底手改 CONFIG 场景）
     if (url.endsWith('/chat/completions')) return url;
     return '$url/chat/completions';
   }
@@ -256,7 +256,15 @@ class LlmClient {
 
     if (!stream) {
       final text = await response.stream.bytesToString();
-      final json = jsonDecode(text) as Map<String, dynamic>;
+      final Map<String, dynamic> json;
+      try {
+        json = jsonDecode(text) as Map<String, dynamic>;
+      } catch (e) {
+        //200 但 body 非法（空响应/网关错误页/截断）：裸 FormatException 会穿透上层
+        //的 on LlmException 链导致静默失败（无 toast/无重载/按钮不变），统一转 LlmException
+        final head = text.length > 200 ? text.substring(0, 200) : text;
+        throw LlmException('响应解析失败（非 JSON）：$head');
+      }
       if (json['error'] != null) {
         throw LlmException(
           _errorText(json['error']),
