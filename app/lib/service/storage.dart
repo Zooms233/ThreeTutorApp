@@ -85,13 +85,6 @@ class StorageService {
     return jsonDecode(text) as Map<String, dynamic>;
   }
 
-  //读取世界内学习者的完整档案（学习者档案页用）
-  Future<Map<String, dynamic>> loadLearnerProfile(String worldName) async {
-    final worldDir = await getWorldDir(worldName);
-    final text = await File('${worldDir.path}/LEARNER.json').readAsString();
-    return jsonDecode(text) as Map<String, dynamic>;
-  }
-
   //返回某课程的目录（课程路径=根目录/课程/课程名）
   Future<Directory> getCourseDir(String name) async {
     final root = await getRootDir();
@@ -158,15 +151,13 @@ class StorageService {
       }
     }
 
-    //拷贝学习者档案并填入称呼/动力/其他（identity 与 story 随文件继承）
-    final learner = jsonDecode(
-      await File('${worldDir.path}/LEARNER.json').readAsString(),
-    ) as Map<String, dynamic>;
-    learner['name'] = learnerName;
-    learner['motivation'] = motivation;
-    learner['extra'] = extra;
+    //学习者档案：创建课程时直接生成（世界不再内置 LEARNER.json）
     await File('${courseDir.path}/LEARNER.json').writeAsString(
-      jsonEncode(learner),
+      jsonEncode({
+        'name': learnerName,
+        'motivation': motivation,
+        'extra': extra,
+      }),
     );
 
     //STATE 初值：从 tutor_a 开始轮换，课程名仅记目录名不写入
@@ -624,7 +615,6 @@ class StorageService {
     await worldDir.create(recursive: true); //File 写入不会自动建目录，必须预先创建
     const fileList = [
       //固定文件配置
-      'LEARNER.json',
       'tutor_a.json',
       'tutor_b.json',
       'tutor_c.json',
