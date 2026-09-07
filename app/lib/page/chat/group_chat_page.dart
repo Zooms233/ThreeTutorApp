@@ -1,8 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
-import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:tutor_chat/main.dart';
 import 'package:tutor_chat/page/chat/course_detail_page.dart';
@@ -52,10 +50,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //初始补足阈值：已加载消息达到此数量即停止向前补（约一屏消息量）
   static const _initialMinMessages = 20;
 
-  //是否桌面端（桌面支持 Ctrl+Enter 快捷发送；移动端软键盘 Enter 即换行）
-  bool get _isDesktop =>
-      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
-
   List<String> _files = []; //全部课次文件路径（旧 → 新，只查名单不读内容）
   List<Map<String, dynamic>> _entries = []; //已加载的消息条目（从最新往前）
   List<_ChatItem> _items = []; //渲染单元（分隔行 + 消息）
@@ -74,7 +68,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
-  final _inputFocus = FocusNode(); //输入框焦点（快捷键判定 + 发送后焦点回位）
   final _service = TutorChatService(); //编排层：三态判定 + 各场景收发与上下课
 
   bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
@@ -83,25 +76,18 @@ class _GroupChatPageState extends State<GroupChatPage> {
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
     _scrollController.addListener(_onScroll); //滑到顶部附近时加载更早课次
-    HardwareKeyboard.instance.addHandler(_onKey); //桌面端 Ctrl+Enter 发送（全局钩子）
     TutorChatService.busyVersion.addListener(_onBusyChanged); //跨页面生成中状态同步
     _load();
   }
 
   @override
   void dispose() {
-    HardwareKeyboard.instance.removeHandler(_onKey); //释放全局键盘钩子
     TutorChatService.busyVersion.removeListener(_onBusyChanged); //移除生成中状态监听
     _scrollController.dispose(); //页面销毁时释放滚动控制器
     _inputController.dispose(); //释放输入控制器，避免内存泄漏
-    _inputFocus.dispose(); //释放焦点节点
     super.dispose();
   }
 
-  //桌面端快捷键（全局键盘钩子，不挂在 TextField 事件流上）：
-  //Ctrl+Enter 发送；Enter 换行由 TextField 原生处理。
-  //不在 TextField 外套 Focus.onKeyEvent 的原因：Windows 中文输入法下，
-  //在 TextField 事件流上干预按键会破坏 IME 组合状态，导致删除键间歇性失效。
   //跨页面生成中状态同步：busy 变更即重绘（含退出重进后的恢复）。
   //busy → 空闲时从文件重载：生成可能发生在本页面之外（如后台群聊），落档内容需拉回屏上。
   void _onBusyChanged() {
@@ -109,20 +95,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final wasBusy = _busy;
     setState(() {}); //文案经 getter 即时读静态表
     if (wasBusy && !_busy) _reload();
-  }
-
-  bool _onKey(KeyEvent event) {
-    if (!_isDesktop) return false;
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.enter &&
-        HardwareKeyboard.instance.isControlPressed &&
-        _inputFocus.hasFocus &&
-        _inputController.text.trim().isNotEmpty &&
-        !_busy) {
-      _sendMessage();
-      return true; //吞掉按键，避免插入换行
-    }
-    return false; //其余全部放行（含 Backspace）
   }
 
   //初始加载：转圈后走同一套加载逻辑
@@ -224,9 +196,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final text = _inputController.text.trim();
     if (text.isEmpty || _busy) return;
     _inputController.clear();
-    //不主动回焦：requestFocus 会重置 IME 连接，Windows 中文输入法下
-    //Backspace 会被僵死的组合态吞掉（退格删不了字、选中替换却可以的疑似成因）；
-    //点击发送按钮若焦点被按钮拿走，点一下输入框即恢复。
 
     //三态判定：idle+未上过课 → 问答；idle+toggle 激活 → 群聊讨论；ongoing → 上课对话
     final flow = await _service.judgeFlow(
@@ -237,7 +206,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final social = flow == 'social';
     final phase = social ? 'social' : (flow == 'teaching' ? 'teaching' : 'qa');
 
-    //乐观上屏：用户消息先显示（服务层此刻正把它写入文件，不重复落档）
+    //乐观更新（optimistic update）：不等生成结果，先假定发送成功让消息立即上屏
+    //（服务层此刻正把它写入文件，界面不重复落档）；若生成失败，
+    //末尾 _reload 从文件重载校正，toast 提示重发
     final userMessage = {
       'type': 'message',
       'phase': phase,
@@ -664,16 +635,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
           Expanded(
             child: TextField(
               controller: _inputController,
-              focusNode: _inputFocus,
               enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
               minLines: 1,
               maxLines: 6, //多行输入，超过 6 行内部滚动
               keyboardType: TextInputType.multiline,
               decoration: InputDecoration(
                 //生成期间输入框即状态位：文案显示 + 禁用（微信同款，替代顶部 Banner）
-                hintText: _busy
-                    ? _busyLabel
-                    : (_isDesktop ? '输入消息…（Ctrl+Enter 发送，Enter 换行）' : '输入消息…'),
+                hintText: _busy ? _busyLabel : '输入消息…',
                 hintStyle: const TextStyle(fontSize: 13),
                 border: InputBorder.none,
                 isDense: true,

@@ -195,13 +195,14 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
       return;
     }
 
-    //仅一个课程：直接进入
+    //仅一个课程：直接进入（清栈，只留 HomePage：返回时落聊天页会话列表）
     if (_courses.length == 1) {
-      Navigator.push(
+      Navigator.pushAndRemoveUntil(
         context,
         CupertinoPageRoute(
           builder: (_) => GroupChatPage(courseName: _courses.first),
         ),
+        (route) => route.isFirst, //保留栈底 HomePage，其余全清
       );
       return;
     }
@@ -220,12 +221,13 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
       ),
     );
     if (selected == null || !mounted) return; //用户取消选择
-    //直接进入该课程群聊页（原「待实现」占位提示为遗留）
-    Navigator.push(
+    //直接进入该课程群聊页（清栈，只留 HomePage：返回时落聊天页会话列表）
+    Navigator.pushAndRemoveUntil(
       context,
       CupertinoPageRoute(
         builder: (_) => GroupChatPage(courseName: selected),
       ),
+      (route) => route.isFirst, //保留栈底 HomePage，其余全清
     );
   }
 }

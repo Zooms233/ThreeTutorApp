@@ -80,12 +80,15 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
         duration: Duration(seconds: 1),
       ),
     );
-    //直接进入新建课程的群聊页（replace 替换表单页：返回时跳过已完成的表单）
-    Navigator.pushReplacement(
+    //直接进入新建课程的群聊页：清掉群聊页以下的全部路由（表单页、导师资料页），
+    //只留根 HomePage —— 返回群聊页时不会倒回导师资料页，
+    //配合群聊页 PopScope 切回聊天 tab，正好落在会话列表
+    Navigator.pushAndRemoveUntil(
       context,
       CupertinoPageRoute(
         builder: (_) => GroupChatPage(courseName: courseName),
       ),
+      (route) => route.isFirst, //保留栈底（HomePage），其余全清
     );
   }
 
