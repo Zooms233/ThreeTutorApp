@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
+import 'package:tutor_chat/main.dart';
 import 'package:tutor_chat/page/chat/group_chat_page.dart';
 import 'package:tutor_chat/service/storage.dart';
 import 'package:tutor_chat/service/tutorchat_service.dart';
@@ -23,13 +24,22 @@ class _TabChatState extends State<TabChat> {
     super.initState(); //先执行 Flutter 自身的初始化
     //监听共享 busy 表：任一课程生成中，对应会话行预览位置显示绿色小字
     TutorChatService.busyVersion.addListener(_onBusyChanged);
+    //IndexedStack 保活后本页 State 不随 tab 切换重建，需自行监听 tab 索引：
+    //切回聊天 tab 即重扫（通讯录建课/更名后回来列表才不会是旧数据）
+    HomePage.pageIndex.addListener(_onTabChanged);
     _loadConversations();
   }
 
   @override
   void dispose() {
     TutorChatService.busyVersion.removeListener(_onBusyChanged);
+    HomePage.pageIndex.removeListener(_onTabChanged);
     super.dispose();
+  }
+
+  //切回聊天 tab 时重扫会话列表（目录轻，重扫毫秒级）
+  void _onTabChanged() {
+    if (HomePage.pageIndex.value == 0 && mounted) _loadConversations();
   }
 
   void _onBusyChanged() {
@@ -114,7 +124,7 @@ class _TabChatState extends State<TabChat> {
     final name = conversation['name'] as String;
     final preview = conversation['preview'] as String;
     final date = conversation['date'] as String;
-    //日期格式：2026-08-04 → 08-04（当年显示，往年补年份）
+    //日期恒显示 MM-DD（与预览同行，年份不展示；date 格式由 listConversations 保证）
     final timeText = date.isEmpty ? '' : date.substring(5);
 
     return Material(
@@ -225,27 +235,32 @@ class _TabChatState extends State<TabChat> {
     final oldName = await _pickCourse('选择要更名的群聊');
     if (oldName == null || !mounted) return; //取消选择
     final controller = TextEditingController(text: oldName);
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('更名课程'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '课程名（即群名）'),
+    String? newName;
+    try {
+      newName = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('更名课程'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(hintText: '课程名（即群名）'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, controller.text.trim()),
+              child: const Text('确定'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
-    );
+      );
+    } finally {
+      controller.dispose(); //对话框关闭后释放控制器，避免内存泄漏
+    }
     if (newName == null || newName.isEmpty || !mounted) return; //取消或空名
     final error = await StorageService().renameCourse(oldName, newName);
     if (!mounted) return;

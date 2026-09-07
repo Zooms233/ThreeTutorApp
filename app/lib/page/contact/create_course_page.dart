@@ -50,7 +50,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     setState(() => _textbookPath = path);
   }
 
-  //提交建课；成功后返回资料页（群聊页实现前的过渡）
+  //提交建课；成功后清栈直达新建课程的群聊页（返回时不倒回表单/资料页）
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);

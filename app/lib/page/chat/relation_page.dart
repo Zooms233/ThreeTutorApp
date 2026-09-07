@@ -107,106 +107,115 @@ class _RelationPageState extends State<RelationPage> {
     final extraC = TextEditingController(
       text: _learner['extra'] as String? ?? '',
     );
-    final hasLessons =
-        (await StorageService().listChatFiles(widget.courseName)).isNotEmpty;
-    if (!mounted) return;
-    var extracting = false; //提炼请求进行中（对话框内局部态，不走全局 busy Banner）
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('编辑学习者档案'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: nameC,
-                autofocus: true,
-                decoration: const InputDecoration(labelText: '称呼'),
-              ),
-              TextField(
-                controller: motivationC,
-                decoration: const InputDecoration(labelText: '学习动力'),
-              ),
-              TextField(
-                controller: extraC,
-                decoration: const InputDecoration(
-                  labelText: '其他',
-                  hintText: '选填，导师可见的补充信息',
+    bool? saved; //对话框返回值（true=保存）；放在 try 外供 finally 后续判断
+    try {
+      final hasLessons = (await StorageService().listChatFiles(
+        widget.courseName,
+      )).isNotEmpty;
+      if (!mounted) return;
+      var extracting = false; //提炼请求进行中（对话框内局部态，不走全局 busy Banner）
+      saved = await showDialog<bool>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('编辑学习者档案'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameC,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: '称呼'),
                 ),
-              ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  //置灰：无课次记录（无材料）或提炼中；结果整段替换「其他」输入框，
-                  //用户看过/改过随保存落盘（LLM 只预填草稿，不直接写档案）
-                  onPressed: !hasLessons || extracting
-                      ? null
-                      : () async {
-                          setDialogState(() => extracting = true);
-                          try {
-                            final draft = await TutorChatService()
-                                .extractLearnerExtra(
-                              courseName: widget.courseName,
-                            );
-                            if (!context.mounted) return;
-                            setDialogState(() => extracting = false);
-                            if (draft == null) {
+                TextField(
+                  controller: motivationC,
+                  decoration: const InputDecoration(labelText: '学习动力'),
+                ),
+                TextField(
+                  controller: extraC,
+                  decoration: const InputDecoration(
+                    labelText: '其他',
+                    hintText: '选填，导师可见的补充信息',
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    //置灰：无课次记录（无材料）或提炼中；结果整段替换「其他」输入框，
+                    //用户看过/改过随保存落盘（LLM 只预填草稿，不直接写档案）
+                    onPressed: !hasLessons || extracting
+                        ? null
+                        : () async {
+                            setDialogState(() => extracting = true);
+                            try {
+                              final draft = await TutorChatService()
+                                  .extractLearnerExtra(
+                                    courseName: widget.courseName,
+                                  );
+                              if (!context.mounted) return;
+                              setDialogState(() => extracting = false);
+                              if (draft == null) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('暂无课次记录'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                                return;
+                              }
+                              if (draft.isEmpty || draft == '无') {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('最近课次中没有值得记录的学习者特征'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                                return;
+                              }
+                              setDialogState(() => extraC.text = draft);
+                            } catch (e) {
+                              if (!context.mounted) return;
+                              setDialogState(() => extracting = false);
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('暂无课次记录'),
-                                  duration: Duration(seconds: 2),
+                                SnackBar(
+                                  content: Text('提炼失败：$e'),
+                                  duration: const Duration(seconds: 3),
                                 ),
                               );
-                              return;
                             }
-                            if (draft.isEmpty || draft == '无') {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('最近课次中没有值得记录的学习者特征'),
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                              return;
-                            }
-                            setDialogState(() => extraC.text = draft);
-                          } catch (e) {
-                            if (!context.mounted) return;
-                            setDialogState(() => extracting = false);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('提炼失败：$e'),
-                                duration: const Duration(seconds: 3),
-                              ),
-                            );
-                          }
-                        },
-                  icon: extracting
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.auto_awesome, size: 16),
-                  label: Text(extracting ? '提炼中…' : '从最近课次提炼'),
+                          },
+                    icon: extracting
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.auto_awesome, size: 16),
+                    label: Text(extracting ? '提炼中…' : '从最近课次提炼'),
+                  ),
                 ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('保存'),
               ),
             ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('保存'),
-            ),
-          ],
         ),
-      ),
-    );
+      );
+    } finally {
+      //对话框关闭（无论取消/保存/中途返回）都释放控制器，避免内存泄漏
+      nameC.dispose();
+      motivationC.dispose();
+      extraC.dispose();
+    }
     if (saved != true || !mounted) return; //取消即丢弃
     final name = nameC.text.trim();
     final motivation = motivationC.text.trim();
@@ -269,7 +278,10 @@ class _RelationPageState extends State<RelationPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(name, style: const TextStyle(fontSize: 13, color: Color(0xFF808080))),
+          Text(
+            name,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF808080)),
+          ),
           const SizedBox(height: 8),
           Text(
             relation.isEmpty ? '尚未建立关系记录' : relation,

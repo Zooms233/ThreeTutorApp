@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:tutor_chat/page/tab_chat.dart';
 import 'package:tutor_chat/page/tab_contact.dart';
@@ -18,8 +19,15 @@ Future<void> main() async {
 Future<void> _ensureStoragePermission() async {
   if (!Platform.isAndroid) return;
   final status = await Permission.manageExternalStorage.status;
-  if (!status.isGranted) {
-    await Permission.manageExternalStorage.request();
+  if (status.isGranted) return;
+
+  await Permission.manageExternalStorage.request();
+  //request 会跳系统设置页，用户开启后返回 app；此处复查，仍拒绝则退出
+  //（无此权限时档案读写全部会崩，与其带着坏状态运行不如直接退出）
+  final granted = await Permission.manageExternalStorage.status;
+  if (!granted.isGranted) {
+    await SystemNavigator.pop(); //结束 activity，等同退出应用
+    return; //退出成功则不再启动 UI；万一 pop 失败，黑屏比崩溃后坏数据更安全
   }
 }
 
@@ -86,10 +94,11 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     //body 与底栏都依赖 tab 索引，整树随 ValueNotifier 重建
+    //IndexedStack 保活三个 tab：切走不销毁 State，回来时滚动位置/已加载数据原样保留
     return ValueListenableBuilder<int>(
       valueListenable: HomePage.pageIndex,
       builder: (_, pageIndex, _) => Scaffold(
-        body: pages[pageIndex],
+        body: IndexedStack(index: pageIndex, children: pages),
         bottomNavigationBar: DecoratedBox(
           //顶部细分割线，贴合微信底部栏样式
           decoration: const BoxDecoration(
