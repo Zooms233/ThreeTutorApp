@@ -82,7 +82,7 @@ JSON 提取：剥离 ```json 围栏 → `jsonDecode`；失败则整请求重试 
 
 ## 协议层（client.dart）
 
-- 请求：POST `<apiUrl>/chat/completions`，头 `Authorization: Bearer <apiKey>`；CONFIG 三项（apiUrl/apiKey/model）来自设置页（服务商选择仅设置页概念：DeepSeek 内置接口覆盖 apiUrl，调用层不感知）；`temperature`/`max_tokens` 用服务商默认
+- 请求：POST `<apiUrl>/chat/completions`（apiUrl 已含端点时防重复拼接，兕底手改 CONFIG 的场景），头 `Authorization: Bearer <apiKey>`；CONFIG 三项（apiUrl/apiKey/model）来自设置页（服务商选择仅设置页概念：DeepSeek 内置接口覆盖 apiUrl，调用层不感知）；`temperature`/`max_tokens` 用服务商默认
 - 连通性检验 `ping`：设置页专用，最小请求（`max_tokens=1`，非流式，15s 超时）验证配置；返回 (成功, 描述)；不计入 usage 调试累计
 - 字段：model、stream=true（仅课后更新非流式）、messages、stream_options=`{"include_usage": true}`（仅流式）、response_format=`{"type":"json_object"}`（仅课后更新）
 - 本项目参数：最多 3 次尝试（408/409/429/5xx/网络异常可重试，退避按 pi 规则）；连接与响应头超时 30s；流式无新数据 120s 判死（按断流处理，已收内容丢弃进重试）

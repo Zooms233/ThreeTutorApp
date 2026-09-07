@@ -271,40 +271,60 @@ class _TabSettingState extends State<TabSetting> {
     'openai': ('OpenAI 兼容', '', ''),
   };
 
-  //当前服务商：显式字段优先；缺省按 apiUrl 匹配内置 DeepSeek 推断（旧配置迁移）
-  String get _currentProvider {
-    final p = _config['provider'] as String?;
-    if (p != null && _providers.containsKey(p)) return p;
-    return (_config['apiUrl'] as String? ?? '') == _providers['deepseek']!.$2
-        ? 'deepseek'
-        : 'openai';
+  //配置档：服务商+模型+Key 三者配套（不同 Key 对应不同接口/模型，不可拆分管理）。
+  //惰性迁移：旧配置无 profiles 时，把顶层 apiUrl/model/apiKey 组装为首档（不落盘，保存时才写入）。
+  List<Map<String, dynamic>> get _profiles {
+    final list = [
+      for (final p in (_config['profiles'] as List? ?? []))
+        Map<String, dynamic>.from(p as Map),
+    ];
+    if (list.isEmpty && (_config['apiKey'] as String? ?? '').isNotEmpty) {
+      final url = _config['apiUrl'] as String? ?? '';
+      final isDeepseek = url == _providers['deepseek']!.$2;
+      list.add({
+        'name': isDeepseek ? 'DeepSeek 官方' : 'OpenAI 兼容',
+        'provider': isDeepseek ? 'deepseek' : 'openai',
+        'apiUrl': url,
+        'model': _config['model'] as String? ?? '',
+        'apiKey': _config['apiKey'],
+      });
+    }
+    return list;
   }
 
-  //Key 库（CONFIG.keys 数组 → List<Map>，副本）
-  List<Map<String, dynamic>> get _savedKeys => [
-        for (final k in (_config['keys'] as List? ?? []))
-          Map<String, dynamic>.from(k as Map),
-      ];
+  //使用中配置档名；失效（被删/未迁移）时回落首档，空列表返回空串
+  String get _activeName {
+    final name = _config['active'] as String? ?? '';
+    final profiles = _profiles;
+    if (profiles.any((p) => p['name'] == name)) return name;
+    return profiles.isEmpty ? '' : profiles.first['name'] as String;
+  }
 
-  //当前 API 配置摘要卡：服务商 / 模型 / 使用中的 Key（遮显+备注名）；点击进入配置对话框
+  //当前 API 配置摘要卡：使用中档的 名称/模型/Key 遮显；点击进入配置对话框
   Widget _buildApiSummary() {
     if (_loading) return const SizedBox.shrink();
-    final info = _providers[_currentProvider]!;
-    final isDeepseek = _currentProvider == 'deepseek';
-    final key = _config['apiKey'] as String? ?? '';
-    final model = isDeepseek ? info.$3 : (_config['model'] as String? ?? '');
-    final matched = _savedKeys.where((k) => k['value'] == key).toList();
-    final keyLabel = key.isEmpty
-        ? '未配置'
-        : (matched.isNotEmpty ? matched.first['label'] as String : '未入库');
+    final matched = _profiles.where((p) => p['name'] == _activeName).toList();
+    if (matched.isEmpty) {
+      return Container(
+        color: Colors.white,
+        margin: const EdgeInsets.all(16),
+        child: const ListTile(
+          leading: Icon(Icons.vpn_key_outlined),
+          title: Text('API 未配置'),
+          subtitle: Text('点击设置服务商、模型与 Key'),
+          trailing: Icon(Icons.chevron_right),
+        ),
+      );
+    }
+    final p = matched.first;
     return Container(
       color: Colors.white,
       margin: const EdgeInsets.all(16),
       child: ListTile(
         leading: const Icon(Icons.vpn_key_outlined),
-        title: Text(info.$1),
+        title: Text(p['name'] as String),
         subtitle: Text(
-          '$model · ${key.isEmpty ? '—' : _maskKey(key)}（$keyLabel）',
+          '${p['model']} · ${_maskKey(p['apiKey'] as String? ?? '')}',
         ),
         trailing: const Icon(Icons.chevron_right),
         onTap: _showApiConfigDialog,
@@ -312,27 +332,12 @@ class _TabSettingState extends State<TabSetting> {
     );
   }
 
-  //API 配置对话框：服务商选择 → DeepSeek 只填 Key（接口/模型内置）；
-  //OpenAI 兼容自填 Base URL + Model。Key 库支持添加/删除/选用；
+  //API 配置对话框：配置档列表（服务商+模型+Key 三者配套，不可拆分管理）。
+  //点击档即选用；添加/编辑走表单子对话框；检验连通性针对选中档。
   //所有改动在对话框内存态，点「保存」一次性落盘 CONFIG.json（取消即丢弃）。
   Future<void> _showApiConfigDialog() async {
-    var provider = _currentProvider;
-    final baseUrlC = TextEditingController(
-      text: _config['apiUrl'] as String? ?? '',
-    );
-    //模型可修改：显式 provider=deepseek 时沿用已保存值（可能被用户改过）；
-    //推断迁移或从其他服务商切回时预填内置默认；OpenAI 兼容沿用已存值
-    final modelC = TextEditingController(
-      text: provider == 'deepseek'
-          ? (_config['provider'] == 'deepseek'
-              ? (_config['model'] as String? ?? _providers['deepseek']!.$3)
-              : _providers['deepseek']!.$3)
-          : (_config['model'] as String? ?? ''),
-    );
-    final keyC = TextEditingController(
-      text: _config['apiKey'] as String? ?? '',
-    );
-    var keys = _savedKeys;
+    var profiles = _profiles;
+    var active = _activeName;
     var testing = false; //连通性检验进行中
     bool? testOk; //检验结果（null=未检验）
     String? testMsg; //检验结果描述
@@ -347,119 +352,103 @@ class _TabSettingState extends State<TabSetting> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                DropdownButtonFormField<String>(
-                  initialValue: provider, //下拉自身内部态驱动显示，外部变量仅同步给 if 分支
-                  decoration: const InputDecoration(labelText: '服务商'),
-                  items: [
-                    for (final e in _providers.entries)
-                      DropdownMenuItem(value: e.key, child: Text(e.value.$1)),
-                  ],
-                  onChanged: (v) => setDialogState(() => provider = v!),
-                ),
-                //DeepSeek：接口内置，模型预填可修改；OpenAI 兼容：自填 Base URL 与 Model
-                if (provider == 'deepseek') ...[
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4, bottom: 4),
-                    child: Text(
-                      '接口 ${_providers['deepseek']!.$2}（内置）· 模型可修改',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF999999),
-                      ),
-                    ),
-                  ),
-                  TextField(
-                    controller: modelC,
-                    decoration: const InputDecoration(
-                      labelText: 'Model（DeepSeek）',
-                      hintText: 'deepseek-v4-flash',
-                    ),
-                  ),
-                ] else ...[
-                  TextField(
-                    controller: baseUrlC,
-                    decoration: const InputDecoration(
-                      labelText: 'Base URL',
-                      hintText: 'https://api.example.com/v1',
-                    ),
-                  ),
-                  TextField(
-                    controller: modelC,
-                    decoration: const InputDecoration(
-                      labelText: 'Model',
-                      hintText: 'gpt-4o-mini',
-                    ),
-                  ),
-                ],
-                TextField(
-                  controller: keyC,
-                  obscureText: true, //Key 遮显
-                  decoration: const InputDecoration(
-                    labelText: 'API Key（当前使用）',
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Text(
-                      '已保存的 Key',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF666666)),
-                    ),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () async {
-                        final added = await _addKeyDialog(keys.length + 1);
-                        if (added == null) return;
-                        setDialogState(() {
-                          keys = [...keys, added];
-                          keyC.text = added['value']!; //新添加即选用
-                        });
-                      },
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('添加'),
-                    ),
-                  ],
-                ),
-                //Key 库列表：点击选用；尾随删除（删使用中的 Key 同步清空当前值）
-                for (final k in keys)
+                //配置档列表：点击选用；尾随编辑/删除（删选中档则回落首档）
+                for (final p in profiles)
                   ListTile(
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      keyC.text.trim() == k['value']
+                      active == p['name']
                           ? Icons.radio_button_checked
                           : Icons.radio_button_unchecked,
                       size: 20,
                       color: const Color(0xFF07C160),
                     ),
-                    title: Text(k['label'] as String? ?? 'Key'),
+                    title: Text(p['name'] as String? ?? '配置'),
                     subtitle: Text(
-                      _maskKey(k['value'] as String? ?? ''),
+                      '${_providers[p['provider'] as String? ?? 'openai']?.$1 ?? 'OpenAI 兼容'}'
+                      ' · ${p['model']} · ${_maskKey(p['apiKey'] as String? ?? '')}',
                       style: const TextStyle(fontSize: 12),
                     ),
                     onTap: () =>
-                        setDialogState(() => keyC.text = k['value'] as String),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      onPressed: () => setDialogState(() {
-                        keys = keys
-                            .where((x) => x['value'] != k['value'])
-                            .toList();
-                        if (keyC.text.trim() == k['value']) keyC.clear();
-                      }),
+                        setDialogState(() => active = p['name'] as String),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit_outlined, size: 20),
+                          tooltip: '编辑',
+                          onPressed: () async {
+                            final edited = await _profileFormDialog(
+                              existing: p,
+                              takenNames: [
+                                for (final q in profiles)
+                                  if (q['name'] != p['name'])
+                                    q['name'] as String,
+                              ],
+                            );
+                            if (edited == null) return;
+                            setDialogState(() {
+                              profiles = <Map<String, dynamic>>[
+                                for (final q in profiles)
+                                  q['name'] == p['name'] ? edited : q,
+                              ];
+                              //编辑中的档若被改名且是选中档 → 同步 active
+                              if (active == p['name']) {
+                                active = edited['name']!;
+                              }
+                            });
+                          },
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 20),
+                          tooltip: '删除',
+                          onPressed: () => setDialogState(() {
+                            profiles = <Map<String, dynamic>>[
+                              ...profiles.where((q) => q['name'] != p['name']),
+                            ];
+                            if (active == p['name']) {
+                              active = profiles.isEmpty
+                                  ? ''
+                                  : profiles.first['name'] as String;
+                            }
+                          }),
+                        ),
+                      ],
                     ),
                   ),
-                if (keys.isEmpty)
+                if (profiles.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(bottom: 8),
                     child: Text(
-                      '尚未保存 Key，点击「添加」入库',
+                      '尚未保存配置，点击「添加配置」',
                       style: TextStyle(
                         fontSize: 12,
                         color: Color(0xFF999999),
                       ),
                     ),
                   ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      final added = await _profileFormDialog(
+                        takenNames: [
+                          for (final q in profiles) q['name'] as String,
+                        ],
+                      );
+                      if (added == null) return;
+                      setDialogState(
+                        () => profiles = <Map<String, dynamic>>[
+                          ...profiles,
+                          added,
+                        ],
+                      );
+                    },
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('添加配置'),
+                  ),
+                ),
                 //连通性检验结果行（对话框内展示，SnackBar 会被对话框遮住）
                 if (testMsg != null)
                   Padding(
@@ -483,12 +472,23 @@ class _TabSettingState extends State<TabSetting> {
               onPressed: testing
                   ? null
                   : () async {
+                      //检验选中档（新填/编辑的档先确定回列表再选中它测）
+                      final sel = profiles
+                          .where((p) => p['name'] == active)
+                          .toList();
+                      if (sel.isEmpty) {
+                        setDialogState(() {
+                          testing = false;
+                          testOk = false;
+                          testMsg = '请先添加并选中一个配置';
+                        });
+                        return;
+                      }
+                      final p = sel.first;
                       final cfg = LlmConfig(
-                        apiUrl: provider == 'deepseek'
-                            ? _providers['deepseek']!.$2
-                            : baseUrlC.text.trim(),
-                        apiKey: keyC.text.trim(),
-                        model: modelC.text.trim(),
+                        apiUrl: p['apiUrl'] as String? ?? '',
+                        apiKey: p['apiKey'] as String? ?? '',
+                        model: p['model'] as String? ?? '',
                       );
                       setDialogState(() {
                         testing = true;
@@ -518,30 +518,24 @@ class _TabSettingState extends State<TabSetting> {
     );
     if (saved != true || !mounted) return; //用户取消，全部改动丢弃
 
-    //组装落盘：DeepSeek 覆盖内置接口/模型；手填未入库的 Key 自动入库
-    final key = keyC.text.trim();
-    final deepseek = provider == 'deepseek';
-    final apiUrl = deepseek ? _providers['deepseek']!.$2 : baseUrlC.text.trim();
-    final model = modelC.text.trim(); //两模式同源（DeepSeek 模式预填可修改）
-    if (apiUrl.isEmpty || model.isEmpty || key.isEmpty) {
+    //落盘：选中档同步到顶层三字段（LLM 调用层唯一事实，调用层不感知配置档概念）
+    final sel = profiles.where((p) => p['name'] == active).toList();
+    if (sel.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('接口地址、模型与 API Key 均不能为空'),
+          content: Text('请先添加并选中一个配置'),
           duration: Duration(seconds: 2),
         ),
       );
       return;
     }
-    if (!keys.any((k) => k['value'] == key)) {
-      keys = [...keys, {'label': '默认', 'value': key}];
-    }
+    final p = sel.first;
     final next = {
-      ..._config,
-      'provider': provider,
-      'apiUrl': apiUrl,
-      'model': model,
-      'apiKey': key,
-      'keys': keys,
+      'profiles': profiles,
+      'active': active,
+      'apiUrl': p['apiUrl'],
+      'model': p['model'],
+      'apiKey': p['apiKey'],
     };
     setState(() => _config = next);
     await StorageService().saveConfig(next);
@@ -554,45 +548,207 @@ class _TabSettingState extends State<TabSetting> {
     );
   }
 
-  //添加 Key 子对话框：备注 + Key 值；确定返回 Map，取消返回 null
-  Future<Map<String, String>?> _addKeyDialog(int index) async {
-    final labelC = TextEditingController(text: 'Key $index');
-    final valueC = TextEditingController();
+  //配置档表单（添加/编辑共用）：名称+服务商+模型+(Base URL)+Key 三件套配套；
+  //DeepSeek 接口内置、模型预填可改；OpenAI 兼容自填。确定返回档 Map，取消返回 null。
+  //takenNames：已有档名（防重名，编辑时传排除自身的名单）；表单内可即时检验当前填写。
+  Future<Map<String, String>?> _profileFormDialog({
+    Map<String, dynamic>? existing, //null=添加
+    List<String> takenNames = const [],
+  }) async {
+    var provider = existing?['provider'] as String? ?? 'deepseek';
+    final nameC = TextEditingController(
+      text: existing?['name'] as String? ??
+          (provider == 'deepseek'
+              ? _providers['deepseek']!.$1
+              : _providers['openai']!.$1),
+    );
+    final baseUrlC = TextEditingController(
+      text: existing?['apiUrl'] as String? ?? '',
+    );
+    //模型预填：编辑沿用档内值；添加时 DeepSeek 用内置默认、兼容留空
+    final modelC = TextEditingController(
+      text: existing?['model'] as String? ??
+          (provider == 'deepseek' ? _providers['deepseek']!.$3 : ''),
+    );
+    final keyC = TextEditingController(
+      text: existing?['apiKey'] as String? ?? '',
+    );
+    var testing = false;
+    bool? testOk;
+    String? testMsg;
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('添加 Key'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: labelC,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: '备注（如：官方 / 备用）',
-              ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(existing == null ? '添加配置' : '编辑配置'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameC,
+                  autofocus: existing == null,
+                  decoration: const InputDecoration(labelText: '配置名称'),
+                ),
+                DropdownButtonFormField<String>(
+                  initialValue: provider, //下拉内部态驱动显示，外部变量同步给 if 分支
+                  decoration: const InputDecoration(labelText: '服务商'),
+                  items: [
+                    for (final e in _providers.entries)
+                      DropdownMenuItem(value: e.key, child: Text(e.value.$1)),
+                  ],
+                  onChanged: (v) => setDialogState(() => provider = v!),
+                ),
+                //DeepSeek：接口内置；OpenAI 兼容：自填 Base URL
+                if (provider == 'deepseek')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4, bottom: 4),
+                    child: Text(
+                      '接口 ${_providers['deepseek']!.$2}（内置）',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF999999),
+                      ),
+                    ),
+                  )
+                else
+                  TextField(
+                    controller: baseUrlC,
+                    onChanged: (v) => _onBaseUrlChanged(baseUrlC), //实时裁剪 v1 后的多余路径
+                    decoration: const InputDecoration(
+                      labelText: 'Base URL',
+                      hintText: 'https://api.example.com/v1',
+                    ),
+                  ),
+                TextField(
+                  controller: modelC,
+                  decoration: InputDecoration(
+                    labelText: provider == 'deepseek'
+                        ? 'Model（DeepSeek）'
+                        : 'Model',
+                    hintText: provider == 'deepseek'
+                        ? _providers['deepseek']!.$3
+                        : 'gpt-4o-mini',
+                  ),
+                ),
+                TextField(
+                  controller: keyC,
+                  obscureText: true, //Key 遮显
+                  decoration: const InputDecoration(labelText: 'API Key'),
+                ),
+                const SizedBox(height: 4),
+                //表单内检验：当前填写即测，不必先保存
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: testing
+                        ? null
+                        : () async {
+                            final cfg = LlmConfig(
+                              apiUrl: provider == 'deepseek'
+                                  ? _providers['deepseek']!.$2
+                                  : baseUrlC.text.trim(),
+                              apiKey: keyC.text.trim(),
+                              model: modelC.text.trim(),
+                            );
+                            setDialogState(() {
+                              testing = true;
+                              testMsg = null;
+                            });
+                            final (ok2, msg) = await _llm.ping(cfg);
+                            if (!context.mounted) return;
+                            setDialogState(() {
+                              testing = false;
+                              testOk = ok2;
+                              testMsg = msg;
+                            });
+                          },
+                    child: Text(testing ? '检验中…' : '检验连通性'),
+                  ),
+                ),
+                if (testMsg != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      testMsg!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: (testOk ?? false)
+                            ? const Color(0xFF07C160)
+                            : const Color(0xFFE64340),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-            TextField(
-              controller: valueC,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Key 值'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确定'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('确定'),
-          ),
-        ],
       ),
     );
-    if (ok != true || valueC.text.trim().isEmpty) return null;
-    return {'label': labelC.text.trim(), 'value': valueC.text.trim()};
+    if (ok != true || !mounted) return null;
+    //校验：名称/接口/模型/Key 均非空；名称不与已有档重复
+    final name = nameC.text.trim();
+    final apiUrl = provider == 'deepseek'
+        ? _providers['deepseek']!.$2
+        : _trimBaseUrlValue(baseUrlC.text.trim()); //确定时再裁一次（防检验/粘贴边缘态）
+    final model = modelC.text.trim();
+    final key = keyC.text.trim();
+    if (name.isEmpty || apiUrl.isEmpty || model.isEmpty || key.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('名称、接口、模型与 Key 均不能为空'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return null;
+    }
+    if (takenNames.contains(name)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('配置名称「$name」已存在'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return null;
+    }
+    return {
+      'name': name,
+      'provider': provider,
+      'apiUrl': apiUrl,
+      'model': model,
+      'apiKey': key,
+    };
+  }
+
+  //Base URL 裁剪：OpenAI 兼协议的 baseUrl 惯例以 /v1 结尾（后面由协议层拼 /chat/completions），
+  //用户常把完整端点粘进来（…/v1/chat/completions）——输入时实时裁掉 v1 之后的部分。
+  //仅当 /v1 是独立路径段（后跟 /）才认定，避免误伤 …/v1abc 或不含 v1 的网关路径（如 …/zen/go）。
+  void _onBaseUrlChanged(TextEditingController c) {
+    final trimmed = _trimBaseUrlValue(c.text);
+    if (trimmed != c.text) {
+      c.value = TextEditingValue(
+        text: trimmed,
+        selection: TextSelection.collapsed(offset: trimmed.length), //光标随裁剪归尾
+      );
+    }
+  }
+
+  //裁剪 /v1 之后的路径（保留到 v1 结束）；无 /v1 段则原样返回
+  String _trimBaseUrlValue(String url) {
+    final m = RegExp(r'^(.*?/v1)(/.*)$').firstMatch(url);
+    return m == null ? url : m.group(1)!;
   }
 
   //Key 遮显：保留前 6 后 4，中间打点（sk-8a8…H9x 式）

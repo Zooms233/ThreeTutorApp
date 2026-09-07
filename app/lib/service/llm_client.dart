@@ -29,6 +29,8 @@ class LlmConfig {
     while (url.endsWith('/')) {
       url = url.substring(0, url.length - 1); //尾斜杠归一化
     }
+    //用户误填完整端点时防重复拼接（设置页输入侧已实时裁剪，此处兕底手改 CONFIG 场景）
+    if (url.endsWith('/chat/completions')) return url;
     return '$url/chat/completions';
   }
 }
