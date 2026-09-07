@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter/services.dart' show rootBundle;
@@ -25,7 +24,9 @@ class TutorChatService {
   //busy 若挂在实例上，退出重进后新实例读不到进行中状态、也收不到完成通知
   //（Banner 丢失 + 完成后不触发刷新——下课总结→更新→群聊全程跨页面存活的关键）。
   static final Map<String, String> _busy = {}; //courseName → Banner 文案；无条目 = 空闲
-  static final ValueNotifier<int> busyVersion = ValueNotifier(0); //busy 每次变更自增，页面监听用
+  static final ValueNotifier<int> busyVersion = ValueNotifier(
+    0,
+  ); //busy 每次变更自增，页面监听用
 
   static void _setBusy(String courseName, String label) {
     if (label.isEmpty) {
@@ -44,16 +45,21 @@ class TutorChatService {
   static void setBusyForCourse(String courseName, String label) =>
       _setBusy(courseName, label);
 
-  TutorChatService({StorageService? storage, PromptBuilder? prompts, LlmClient? client})
-      : _storage = storage ?? StorageService(),
-        _prompts = prompts ?? PromptBuilder(),
-        _client = client ?? LlmClient();
+  TutorChatService({
+    StorageService? storage,
+    PromptBuilder? prompts,
+    LlmClient? client,
+  }) : _storage = storage ?? StorageService(),
+       _prompts = prompts ?? PromptBuilder(),
+       _client = client ?? LlmClient();
 
   // —— 基础 ——
 
-  Future<LlmConfig> _config() async => LlmConfig.fromMap(await _storage.loadConfig());
+  Future<LlmConfig> _config() async =>
+      LlmConfig.fromMap(await _storage.loadConfig());
 
-  Future<String> _courseDir(String courseName) async => (await _storage.getCourseDir(courseName)).path;
+  Future<String> _courseDir(String courseName) async =>
+      (await _storage.getCourseDir(courseName)).path;
 
   // —— token 用量入账 ——
   //统一对话出口：透传协议层；成功后把 usage 追加进数据根 USAGE.jsonl。设置页「用量统计」
@@ -124,24 +130,32 @@ class TutorChatService {
     return '${_today()} ${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}';
   }
 
-  Future<void> _appendUser(String path, String name, String content, String phase) =>
-      _storage.appendChatMessage(path, {
-        'type': 'message',
-        'phase': phase,
-        'role': 'user',
-        'name': name,
-        'time': _now(),
-        'content': content,
-      });
+  Future<void> _appendUser(
+    String path,
+    String name,
+    String content,
+    String phase,
+  ) => _storage.appendChatMessage(path, {
+    'type': 'message',
+    'phase': phase,
+    'role': 'user',
+    'name': name,
+    'time': _now(),
+    'content': content,
+  });
 
-  Future<void> _appendTutor(String path, String name, String content, String phase) =>
-      _storage.appendChatMessage(path, {
-        'type': 'message',
-        'phase': phase,
-        'role': 'tutor',
-        'name': name,
-        'content': content,
-      });
+  Future<void> _appendTutor(
+    String path,
+    String name,
+    String content,
+    String phase,
+  ) => _storage.appendChatMessage(path, {
+    'type': 'message',
+    'phase': phase,
+    'role': 'tutor',
+    'name': name,
+    'content': content,
+  });
 
   //social 落档目标：上一课文件尾（群聊讨论段）；不足两课时兕底最新文件
   Future<String> _socialTargetFile(String courseName) async {
@@ -155,7 +169,9 @@ class TutorChatService {
     for (final e in Directory(courseDir).listSync()) {
       final base = e.path.split(Platform.pathSeparator).last;
       if (e is File && base.startsWith('tutor_') && base.endsWith('.json')) {
-        final name = (jsonDecode(await e.readAsString()) as Map<String, dynamic>)['name'] as String?;
+        final name =
+            (jsonDecode(await e.readAsString()) as Map<String, dynamic>)['name']
+                as String?;
         if (name != null && name.isNotEmpty) names.add(name);
       }
     }
@@ -192,8 +208,14 @@ class TutorChatService {
   }
 
   //回复行解析：「{导师名}: {内容}」（半/全角冒号）；未命中导师名 → (fallback, 原行)
-  (String, String) _parseReplyLine(String line, List<String> tutorNames, String fallback) {
-    final pattern = RegExp('^(${tutorNames.map(RegExp.escape).join('|')})[::]\\s*(.*)\$');
+  (String, String) _parseReplyLine(
+    String line,
+    List<String> tutorNames,
+    String fallback,
+  ) {
+    final pattern = RegExp(
+      '^(${tutorNames.map(RegExp.escape).join('|')})[::]\\s*(.*)\$',
+    );
     final m = pattern.firstMatch(line.trim());
     if (m == null) return (fallback, line.trim());
     return (m.group(1)!, m.group(2)!.trim());
@@ -221,7 +243,10 @@ class TutorChatService {
 
   ///返回 'qa' | 'teaching' | 'social'（04 消息三态与发送流向）。
   ///idle 且未上过课 → qa（无 toggle）；idle 且上过课 → toggle 未激活 qa / 激活 social；ongoing → teaching。
-  Future<String> judgeFlow(String courseName, {required bool toggleActive}) async {
+  Future<String> judgeFlow(
+    String courseName, {
+    required bool toggleActive,
+  }) async {
     final meta = await _storage.loadLatestChatMeta(courseName);
     if (meta == null) return 'qa';
     if (meta['status'] == 'ongoing') return 'teaching';
@@ -243,8 +268,11 @@ class TutorChatService {
     final path = social
         ? await _socialTargetFile(courseName)
         : (await _storage.getCurrentLesson(courseName))['path'] as String;
-    final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
-    final responder = meta['tutor'] as String? ?? '导师'; //问答=next_tutor；聊天前缀未命中时的回退
+    final meta =
+        jsonDecode((await File(path).readAsLines()).first)
+            as Map<String, dynamic>;
+    final responder =
+        meta['tutor'] as String? ?? '导师'; //问答=next_tutor；聊天前缀未命中时的回退
     _setBusy(courseName, social ? '群里正在输入中…' : '$responder 正在输入中…'); //跨页面生成中状态
     try {
       final learner = await _storage.loadCourseLearner(courseName);
@@ -256,7 +284,11 @@ class TutorChatService {
       final courseDir = await _courseDir(courseName);
       final messages = social
           ? await _prompts.social(courseDir: courseDir, chatPath: path)
-          : await _prompts.qa(courseDir: courseDir, chatPath: path, tutorName: responder);
+          : await _prompts.qa(
+              courseDir: courseDir,
+              chatPath: path,
+              tutorName: responder,
+            );
 
       final result = await _chatLogged(
         course: courseName,
@@ -268,7 +300,11 @@ class TutorChatService {
       );
 
       final (name, text) = social
-          ? _parseReplyLine(result.text, await _tutorNames(courseDir), responder)
+          ? _parseReplyLine(
+              result.text,
+              await _tutorNames(courseDir),
+              responder,
+            )
           : (responder, result.text.trim());
       await _appendTutor(path, name, text, phase);
       return (name, text);
@@ -287,8 +323,12 @@ class TutorChatService {
   }) async {
     final lesson = await _storage.getCurrentLesson(courseName);
     final path = lesson['path'] as String;
-    final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
-    if (meta['status'] != 'ongoing') throw LlmException('非上课状态（meta=${meta['status']}），无法走上课对话');
+    final meta =
+        jsonDecode((await File(path).readAsLines()).first)
+            as Map<String, dynamic>;
+    if (meta['status'] != 'ongoing') {
+      throw LlmException('非上课状态（meta=${meta['status']}），无法走上课对话');
+    }
     final tutor = meta['tutor'] as String? ?? '导师';
     _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态
     try {
@@ -297,7 +337,11 @@ class TutorChatService {
 
       await _appendUser(path, userName, content, 'teaching');
       final courseDir = await _courseDir(courseName);
-      final messages = await _prompts.teaching(courseDir: courseDir, chatPath: path, tutorName: tutor);
+      final messages = await _prompts.teaching(
+        courseDir: courseDir,
+        chatPath: path,
+        tutorName: tutor,
+      );
       final result = await _chatLogged(
         course: courseName,
         lessonPath: path,
@@ -326,7 +370,9 @@ class TutorChatService {
       await _storage.patchChatMeta(path, {'status': 'ongoing'});
 
       final courseDir = await _courseDir(courseName);
-      final dispatch = await rootBundle.loadString('assets/prompts/dispatch_greeting.md');
+      final dispatch = await rootBundle.loadString(
+        'assets/prompts/dispatch_greeting.md',
+      );
       final messages = await _prompts.teaching(
         courseDir: courseDir,
         chatPath: path,
@@ -367,7 +413,9 @@ class TutorChatService {
     try {
       //下课总结（meta 仍 ongoing）
       final courseDir = await _courseDir(courseName);
-      final dispatch = await rootBundle.loadString('assets/prompts/dispatch_summary.md');
+      final dispatch = await rootBundle.loadString(
+        'assets/prompts/dispatch_summary.md',
+      );
       final messages = await _prompts.teaching(
         courseDir: courseDir,
         chatPath: path,
@@ -420,8 +468,11 @@ class TutorChatService {
   }) async {
     Map<String, dynamic>? output;
     for (var attempt = 0; attempt < 2; attempt++) {
-      final messages =
-          await _prompts.update(courseDir: courseDir, chatPath: lessonPath, tutorName: tutorName);
+      final messages = await _prompts.update(
+        courseDir: courseDir,
+        chatPath: lessonPath,
+        tutorName: tutorName,
+      );
       final result = await _chatLogged(
         course: courseName,
         lessonPath: lessonPath,
@@ -439,11 +490,23 @@ class TutorChatService {
       }
     }
     //写档四步；群聊生成写本课文件尾；下一课文件在群聊落档后创建（qa 交流写它的头部）
-    final nextTutor = await _applyLessonUpdate(courseName, courseDir, lessonPath, tutorName, lessonNo, output!);
+    final nextTutor = await _applyLessonUpdate(
+      courseName,
+      courseDir,
+      lessonPath,
+      tutorName,
+      lessonNo,
+      output!,
+    );
     _setBusy(courseName, '群里正在输入中…'); //群聊阶段切换 Banner 文案（跨页面状态）
     //群聊生成：输入=本课对话，写档=本课文件尾（总结之后）；失败跳过，不阻塞课后更新其余成果
     try {
-      await _generateGroupChat(courseDir, lessonPath, lessonPath, onMessage: onMessage);
+      await _generateGroupChat(
+        courseDir,
+        lessonPath,
+        lessonPath,
+        onMessage: onMessage,
+      );
     } catch (_) {}
     await _storage.createLessonFile(courseName, lessonNo + 1, nextTutor);
     return true;
@@ -482,14 +545,19 @@ class TutorChatService {
         'review': _offsetReview(today, status),
       };
       final mistake = item['mistake'] as String?;
-      if (status != '✓' && mistake != null && mistake.isNotEmpty) block['mistake'] = mistake;
+      if (status != '✓' && mistake != null && mistake.isNotEmpty) {
+        block['mistake'] = mistake;
+      }
       final idx = rows.indexWhere((r) => r['name'] == name);
       if (idx >= 0) {
         final row = rows[idx];
         row['records'] = [...(row['records'] as List? ?? const []), block];
         rows[idx] = row;
       } else {
-        rows.add({'name': name, 'records': [block]});
+        rows.add({
+          'name': name,
+          'records': [block],
+        });
       }
     }
     final progressText = rows.map(jsonEncode).join('\n');
@@ -500,7 +568,8 @@ class TutorChatService {
     if (relation != null && relation.isNotEmpty) {
       final tutorFile = await _tutorFile(courseDir, tutorName);
       if (tutorFile != null) {
-        final data = jsonDecode(await tutorFile.readAsString()) as Map<String, dynamic>;
+        final data =
+            jsonDecode(await tutorFile.readAsString()) as Map<String, dynamic>;
         if (data['relation'] != relation) {
           data['relation'] = relation;
           await tutorFile.writeAsString(jsonEncode(data));
@@ -509,7 +578,10 @@ class TutorChatService {
     }
 
     //4. 本课 meta：status→ended、date→实际完成日（lesson/tutor 保持）
-    await _storage.patchChatMeta(lessonPath, {'status': 'ended', 'date': today});
+    await _storage.patchChatMeta(lessonPath, {
+      'status': 'ended',
+      'date': today,
+    });
     return nextTutor;
   }
 
@@ -522,12 +594,21 @@ class TutorChatService {
     String targetPath, {
     void Function(Map<String, dynamic> message)? onMessage,
   }) async {
-    final dispatch = await rootBundle.loadString('assets/prompts/dispatch_group.md');
-    final messages = await _prompts.groupChat(courseDir: courseDir, chatPath: chatPath, dispatch: dispatch);
+    final dispatch = await rootBundle.loadString(
+      'assets/prompts/dispatch_group.md',
+    );
+    final messages = await _prompts.groupChat(
+      courseDir: courseDir,
+      chatPath: chatPath,
+      dispatch: dispatch,
+    );
     final names = await _tutorNames(courseDir);
     //未命中导师名 → name 取 meta.tutor（本课导师，04 规定）
-    final meta = jsonDecode((await File(chatPath).readAsLines()).first) as Map<String, dynamic>;
-    final fallback = meta['tutor'] as String? ?? (names.isNotEmpty ? names.first : '导师');
+    final meta =
+        jsonDecode((await File(chatPath).readAsLines()).first)
+            as Map<String, dynamic>;
+    final fallback =
+        meta['tutor'] as String? ?? (names.isNotEmpty ? names.first : '导师');
 
     //流式逐行解析：delta 增量拼入 buffer，每遇完整行即解析落档；
     //写档用串行链保证行序（文件追加不能并发）；解析本身同步（在 onDelta 回调里）

@@ -418,16 +418,23 @@ class _TabSettingState extends State<TabSetting> {
                         IconButton(
                           icon: const Icon(Icons.delete_outline, size: 20),
                           tooltip: '删除',
-                          onPressed: () => setDialogState(() {
-                            profiles = <Map<String, dynamic>>[
-                              ...profiles.where((q) => q['name'] != p['name']),
-                            ];
-                            if (active == p['name']) {
-                              active = profiles.isEmpty
-                                  ? ''
-                                  : profiles.first['name'] as String;
-                            }
-                          }),
+                          //二次确认：误删配置档 = 连带丢失 Key，且 Key 无法找回
+                          onPressed: () async {
+                            final confirmed = await _confirmDeleteProfile(
+                              p['name'] as String? ?? '',
+                            );
+                            if (confirmed != true) return; //取消即不动
+                            setDialogState(() {
+                              profiles = <Map<String, dynamic>>[
+                                ...profiles.where((q) => q['name'] != p['name']),
+                              ];
+                              if (active == p['name']) {
+                                active = profiles.isEmpty
+                                    ? ''
+                                    : profiles.first['name'] as String;
+                              }
+                            });
+                          },
                         ),
                       ],
                     ),
@@ -559,6 +566,31 @@ class _TabSettingState extends State<TabSetting> {
       const SnackBar(
         content: Text('API 配置已保存'),
         duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  //删除配置档二次确认：对话框内完成（主对话框之上叠一层），确认才执行内存删除
+  //（保存才落盘，取消两层都无损）；提示选中的档被删后回落首档
+  Future<bool?> _confirmDeleteProfile(String name) {
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除配置档'),
+        content: Text('确定删除「$name」吗？\n其包含的 API Key 将一并移除，且无法找回。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE64340), //红色警示：不可逆操作
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
       ),
     );
   }
