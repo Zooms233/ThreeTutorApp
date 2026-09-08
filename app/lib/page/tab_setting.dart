@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
 import 'package:three_tutor/page/usage_page.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
@@ -45,6 +46,7 @@ class _TabSettingState extends State<TabSetting> {
               children: [
                 _buildApiSummary(), //当前 API 配置摘要（点击进入配置对话框）
                 _buildUsageEntry(), //用量统计入口（往期课程 token 消耗）
+                _buildTutorTemplateEntry(), //导师参考提示词（复制模板 → 应用外生成自定义导师组）
                 const SizedBox(height: 32),
                 const Center(
                   //与 pubspec version 同步（引入 package_info 前先硬编码）
@@ -151,6 +153,75 @@ class _TabSettingState extends State<TabSetting> {
             MaterialPageRoute(builder: (_) => const UsagePage()),
           ),
         ),
+      ),
+    );
+  }
+
+  //导师参考提示词入口卡：复制模板文本，在应用外用任意 AI 生成自定义导师组
+  Widget _buildTutorTemplateEntry() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Material(
+        color: Colors.white, //同上：水波纹可见
+        child: ListTile(
+          leading: const Icon(Icons.school_outlined),
+          title: const Text('导师参考提示词'),
+          subtitle: const Text('复制模板，应用外生成自定义导师组'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _showTemplateDialog,
+        ),
+      ),
+    );
+  }
+
+  //模板对话框：展示 tutor_template.md 全文（可选可复制），一键复制全文
+  Future<void> _showTemplateDialog() async {
+    String text;
+    try {
+      text = await rootBundle.loadString('assets/prompts/tutor_template.md');
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('模板加载失败：$e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('导师参考提示词'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              text,
+              style: const TextStyle(fontSize: 13, height: 1.5),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('已复制'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy, size: 16),
+            label: const Text('复制全文'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
       ),
     );
   }

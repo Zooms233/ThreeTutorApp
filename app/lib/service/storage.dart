@@ -741,6 +741,127 @@ class StorageService {
     }
   }
 
+  // —— 自定义导师组导入（外部 LLM 按模板生成的单份文本）——
+
+  //解析导师模板：全局头（世界名，可选）+ 3 位导师标记段 → (世界名, 导师档案)。
+  //宽容规则：剥 markdown 围栏；中英冒号；中英文键名（白名单）兼容；示例句收集「- 」行；
+  //非键行并入上一字段（换行拼接）；字段缺失置空串（档案薄不致命，name 除外）。
+  //仅两类错抛 FormatException（消息面向用户）：导师段数≠3 / 某段缺姓名
+  static (String, List<Map<String, dynamic>>) parseTutorTemplate(String raw) {
+    const keyMap = <String, String>{
+      '姓名': 'name',
+      '身份': 'identity',
+      '性格关键词': 'traits',
+      '性格与动机': 'personality',
+      '说话风格': 'speech_style',
+      '示例句': 'speech_examples',
+      '关系': 'relation',
+      'name': 'name',
+      'identity': 'identity',
+      'traits': 'traits',
+      'personality': 'personality',
+      'speech_style': 'speech_style',
+      'speech_examples': 'speech_examples',
+      'relation': 'relation',
+    };
+    //键值行：短键 + 中英冒号（键长≤15 覆盖 speech_examples；白名单兜底防句子误判）
+    final kv = RegExp(r'^([^：:]{1,15})[：:]\s*(.*)$');
+
+    var worldName = '';
+    final tutors = <Map<String, dynamic>>[];
+    Map<String, dynamic>? cur; //null = 全局头区（首个导师段之前）
+    var inExamples = false; //示例句列表收集模式
+    String? lastKey; //非键行并入目标
+
+    for (final rawLine in raw.split(RegExp(r'\r?\n'))) {
+      final line = rawLine.trim();
+      if (line.isEmpty || line.startsWith('```')) continue; //空行 / 围栏行
+      final isHeader = line.contains('导师') &&
+          ((line.startsWith('【') && line.endsWith('】')) || line.startsWith('#'));
+      if (isHeader) {
+        if (cur != null) tutors.add(cur);
+        cur = {
+          'name': '',
+          'identity': '',
+          'traits': '',
+          'personality': '',
+          'speech_style': '',
+          'speech_examples': <String>[],
+          'relation': '',
+        };
+        inExamples = false;
+        lastKey = null;
+        continue;
+      }
+      final m = kv.firstMatch(line);
+      final key = m?.group(1)?.trim();
+      if (m != null && key == '世界名' && cur == null) {
+        worldName = m.group(2)!.trim(); //全局头区：世界名（导师段内的忽略）
+        inExamples = false;
+        lastKey = null;
+        continue;
+      }
+      if (m != null &&
+          key != null &&
+          keyMap.containsKey(key) &&
+          cur != null) {
+        final field = keyMap[key]!;
+        final value = m.group(2)!.trim();
+        if (field == 'speech_examples') {
+          inExamples = true; //进入列表收集模式（首行内联值也收）
+          //防样板说明被照抄：模板曾把“以下 4 条…”写在字段行上，LLM 会原样带回
+          if (value.isNotEmpty && !value.startsWith('以下') && !value.startsWith('如下')) {
+            (cur['speech_examples'] as List<String>).add(value);
+          }
+        } else {
+          inExamples = false;
+          cur[field] = value;
+        }
+        lastKey = field;
+        continue;
+      }
+      //非键行：示例句模式收列表项（剥 - 前缀）；否则并入上一字段
+      if (cur != null && inExamples) {
+        final item = line.replaceFirst(RegExp(r'^[-•·]\s*'), '').trim();
+        if (item.isNotEmpty) (cur['speech_examples'] as List<String>).add(item);
+      } else if (cur != null &&
+          lastKey != null &&
+          lastKey != 'speech_examples') {
+        cur[lastKey] = '${cur[lastKey]}\n$line';
+      }
+      //全局头区的杂散行忽略
+    }
+    if (cur != null) tutors.add(cur);
+
+    if (tutors.length != 3) {
+      throw FormatException(
+        '识别到 ${tutors.length} 位导师，需要恰好 3 位（分段行需含「导师」二字）',
+      );
+    }
+    for (var i = 0; i < tutors.length; i++) {
+      if ((tutors[i]['name'] as String).trim().isEmpty) {
+        throw FormatException('第 ${i + 1} 位导师缺少姓名');
+      }
+    }
+    return (worldName, tutors);
+  }
+
+  //将解析后的导师组落盘为新世界（tutor_a/b/c.json）；目录已存在抛异常（调用方提示）
+  Future<void> saveTutorWorld(
+    String worldName,
+    List<Map<String, dynamic>> tutors,
+  ) async {
+    final worldDir = await getWorldDir(worldName);
+    if (worldDir.existsSync()) {
+      throw Exception('世界「$worldName」已存在');
+    }
+    await worldDir.create(recursive: true); //File 写入不会自动建目录，必须预先创建
+    for (var i = 0; i < tutors.length && i < 3; i++) {
+      await File('${worldDir.path}/tutor_${String.fromCharCode(97 + i)}.json')
+          .writeAsString(const JsonEncoder.withIndent('  ').convert(tutors[i]));
+    }
+  }
+
   //导入全部内置世界，返回汇总消息
   Future<String> importBuiltinWorlds() async {
     const builtinWorlds = ['杏坛']; //内置世界清单，对应assets/worlds/
