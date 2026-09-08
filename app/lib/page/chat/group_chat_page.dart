@@ -409,12 +409,14 @@ class _GroupChatPageState extends State<GroupChatPage> {
     List<Map<String, dynamic>> entries,
   ) {
     final keys = List<String>.filled(entries.length, '');
-    var last = ''; //向前最近 user 的 time（tutor 继承源）
+    var last = ''; //向前最近 user 的 time（tutor/辅助行继承源）
     for (var i = 0; i < entries.length; i++) {
       final e = entries[i];
-      if (e['type'] != 'message') continue; //meta 第二遍处理
-      if (e['role'] == 'user') last = e['time'] as String? ?? last;
-      keys[i] = last;
+      if (e['type'] == 'meta') continue; //meta 第二遍处理
+      if (e['type'] == 'message' && e['role'] == 'user') {
+        last = e['time'] as String? ?? last;
+      }
+      keys[i] = last; //tutor 与 tool_call/tool 辅助行继承最近 user 锚点（保持物理行序）
     }
     for (var i = 0; i < entries.length; i++) {
       if (entries[i]['type'] == 'meta') {
@@ -483,6 +485,17 @@ class _GroupChatPageState extends State<GroupChatPage> {
           ),
         );
         seenSocial = false; //新课开始，重置课后标记（每课的课后闲聊各自插入）
+      } else if (entry['type'] == 'tool_call') {
+        //agent 翻书中间轮：不渲染（可见提示由随后的 tool 行承载）
+      } else if (entry['type'] == 'tool') {
+        //翻书记录：轻量系统提示（成功指针行与失败快照行都渲染）
+        final name = entry['name'] as String? ?? '';
+        final file = entry['file'] as String?;
+        final section = entry['section'] as String?;
+        final label = file != null && section != null
+            ? '翻阅教材：$file > $section'
+            : '翻阅教材（内容暂不可用）';
+        items.add(_ChatItem.divider('📖 $name $label'));
       } else {
         final phase = entry['phase'] as String? ?? 'teaching';
         if (phase == 'social' && !seenSocial) {

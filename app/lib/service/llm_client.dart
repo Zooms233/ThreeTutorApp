@@ -63,8 +63,15 @@ class LlmUsage {
 class LlmResult {
   final String text;
   final LlmUsage? usage;
+  //OpenAI 兼容 tool_calls（agent 翻书用）：每项 {id, type, function:{name, arguments}}
+  //arguments 为 JSON 字符串；无工具调用时为空列表
+  final List<Map<String, dynamic>> toolCalls;
 
-  const LlmResult({required this.text, this.usage});
+  const LlmResult({
+    required this.text,
+    this.usage,
+    this.toolCalls = const [],
+  });
 }
 
 class LlmException implements Exception {
@@ -152,7 +159,7 @@ class LlmClient {
   ///失败重试后仍耗尽 → 抛 LlmException，由场景层决定善后。
   Future<LlmResult> chat({
     required LlmConfig config,
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     bool jsonMode = false, //true → response_format json_object（JSON 协议场景）
     bool stream = true,
     int? maxTokens, //生成上限（JSON 场景 4096：文档建议合理设置防截断，也防输出失控）
@@ -160,6 +167,7 @@ class LlmClient {
     //null=模型默认（enabled + effort high）；'disabled'=关闭；'low'=低强度。
     //默认 high 下重任务（更新/群聊）思考数万 token，耗时与 output 计费双双爆炸；
     //但直接 disabled 会让重任务指令遵循崩掉（实测复读用户指令而非执行）——重任务用 'low'。
+    List<Map<String, dynamic>>? tools, //OpenAI 兼容 tools 定义（agent 翻书）；null=不带
     void Function(String delta)? onDelta,
     String? label,
   }) async {
@@ -177,6 +185,7 @@ class LlmClient {
         },
         if (thinkingEffort != 'disabled') 'reasoning_effort': thinkingEffort,
       },
+      'tools': ?tools,
       'messages': messages,
     };
     final String body;
@@ -286,14 +295,20 @@ class LlmClient {
         );
       }
       var content = '';
+      var toolCalls = const <Map<String, dynamic>>[];
       final choices = json['choices'] as List?;
       if (choices != null && choices.isNotEmpty) {
         final message = (choices.first as Map<String, dynamic>)['message'];
         if (message is Map<String, dynamic>) {
           content = message['content'] as String? ?? '';
+          toolCalls = _normalizeToolCalls(message['tool_calls']);
         }
       }
-      return LlmResult(text: content, usage: _parseUsage(json['usage']));
+      return LlmResult(
+        text: content,
+        usage: _parseUsage(json['usage']),
+        toolCalls: toolCalls,
+      );
     }
 
     //流式：utf8 解码按行缓冲，data: 前缀剥离 → [DONE] 结束；断流（无 [DONE]/超时/解析失败）视为失败，交由重试
@@ -301,6 +316,9 @@ class LlmClient {
     final lineBuffer = StringBuffer(); //跨 chunk 的半行
     LlmUsage? usage;
     var sawDone = false;
+    //流式 tool_calls 聚合：delta 按 index 分片（id/name 只在首片，arguments 跨片拼接）
+    final toolCallSlots = <int, Map<String, dynamic>>{};
+    final toolCallOrder = <int>[]; //index 首次出现顺序（分片可能乱序到达）
 
     try {
       await for (final chunk in _idleGuard(response.stream)) {
@@ -338,6 +356,38 @@ class LlmClient {
             final deltaMap = (choices.first as Map<String, dynamic>)['delta'];
             if (deltaMap is Map<String, dynamic>) {
               delta = deltaMap['content'] as String?;
+              final rawToolCalls = deltaMap['tool_calls'];
+              if (rawToolCalls is List) {
+                for (final raw in rawToolCalls) {
+                  if (raw is! Map<String, dynamic>) continue;
+                  final index = raw['index'] as int? ?? 0;
+                  if (!toolCallSlots.containsKey(index)) {
+                    toolCallOrder.add(index);
+                  }
+                  final slot = toolCallSlots.putIfAbsent(
+                    index,
+                    () => {
+                      'id': '',
+                      'type': 'function',
+                      'function': {'name': '', 'arguments': ''},
+                    },
+                  );
+                  final id = raw['id'] as String?;
+                  if (id != null && id.isNotEmpty) slot['id'] = id;
+                  final fn = raw['function'];
+                  if (fn is Map<String, dynamic>) {
+                    final name = fn['name'] as String?;
+                    if (name != null && name.isNotEmpty) {
+                      (slot['function'] as Map<String, dynamic>)['name'] = name;
+                    }
+                    final args = fn['arguments'] as String?;
+                    if (args != null && args.isNotEmpty) {
+                      (slot['function'] as Map<String, dynamic>)['arguments'] =
+                          '${(slot['function'] as Map<String, dynamic>)['arguments']}$args';
+                    }
+                  }
+                }
+              }
             }
           }
           if (delta != null && delta.isNotEmpty) {
@@ -358,7 +408,23 @@ class LlmClient {
         response.headers,
       );
     }
-    return LlmResult(text: buffer.toString(), usage: usage);
+    return LlmResult(
+      text: buffer.toString(),
+      usage: usage,
+      toolCalls: _normalizeToolCalls([
+        for (final i in toolCallOrder) toolCallSlots[i],
+      ]),
+    );
+  }
+
+  //tool_calls 规范化：剔除未完成的空槽（无 id 视为解析失败残留）
+  List<Map<String, dynamic>> _normalizeToolCalls(Object? raw) {
+    if (raw is! List) return const [];
+    final calls = raw
+        .whereType<Map<String, dynamic>>()
+        .where((c) => (c['id'] as String? ?? '').isNotEmpty)
+        .toList();
+    return calls;
   }
 
   //流式空闲防护：每次收到数据重置计时；_streamIdleTimeout 内无新数据 → 注入错误并关流

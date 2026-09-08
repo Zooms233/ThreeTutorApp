@@ -7,14 +7,21 @@ import 'package:flutter/services.dart' show rootBundle;
 //system 按缓存顺序排列：①规则 → ②档案 → ③状态 → ④本次注入 → 对话历史（04-LLM调用.md）。
 //IO 只发生在读取资源时；拼装本身为纯字符串运算。
 
-///一条请求消息。role: system/user/assistant。
+///一条请求消息。role: system/user/assistant/tool。
 class PromptMessage {
   final String role;
-  final String content;
+  final String? content; //null 仅用于带 tool_calls 的 assistant 消息（OpenAI 约定）
+  final List<Map<String, dynamic>>? toolCalls; //assistant 的 tool_calls 数组（agent 翻书）；无则 null
+  final String? toolCallId; //tool 消息的 tool_call_id
 
-  const PromptMessage(this.role, this.content);
+  const PromptMessage(this.role, [this.content, this.toolCalls, this.toolCallId]);
 
-  Map<String, String> toMap() => {'role': role, 'content': content};
+  Map<String, dynamic> toMap() => {
+        'role': role,
+        if (content != null) 'content': content,
+        if (toolCalls != null) 'tool_calls': toolCalls,
+        if (toolCallId != null) 'tool_call_id': toolCallId,
+      };
 }
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
@@ -257,7 +264,43 @@ class PromptBuilder {
     return ['今日教材进度：$pos\n$trimmed', ?toc].join('\n\n');
   }
 
-  // —— CHAT 历史映射 ——
+  // —— agent 翻书工具（read_textbook）——
+  //只读教材一节；与目录寻址一致（file=文件名、section=节标题）。
+  //static 常量保证各场景请求字节级一致（影响缓存前缀的稳定段）。
+  static const textbookToolDefs = [
+    {
+      'type': 'function',
+      'function': {
+        'name': 'read_textbook',
+        'description': '读取教材中指定一节的内容并追加到对话。教材文件名与节标题见【教材目录】（没有教材目录或找不到该节时不要调用）。只读取目录中列出的节。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'file': {'type': 'string', 'description': '教材文件名，如 第一章.md'},
+            'section': {'type': 'string', 'description': '节标题，如 3-2 化学平衡移动'},
+          },
+          'required': ['file', 'section'],
+        },
+      },
+    },
+  ];
+
+  //执行 read_textbook：读盘→截断→模板；返回 tool 消息内容（未找到返回 null，由调用方给错误提示）
+  static String? executeTextbookTool(
+    String courseDir,
+    String file,
+    String section,
+  ) {
+    final body = readTextbookSection(courseDir, file, section);
+    if (body == null) return null;
+    var trimmed = body;
+    if (trimmed.length > _textbookLimit) {
+      trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
+    }
+    return textbookMaterialization(file, section, trimmed);
+  }
+
+// —— CHAT 历史映射 ——
 
   //meta 行不映射；textbook 指针行物化为 user 消息（读盘现展开——同一指针 + 教材未改则字节级一致，
   //前缀命中沿历史延伸）；user→user（time 并入头部）、tutor→assistant，原文原样（含 @read 行）；
@@ -281,6 +324,31 @@ class PromptBuilder {
         if (mat != null) mapped.add(PromptMessage('user', mat));
         continue; //指针行本身不映射（物化消息替它登场）
       }
+      if (row['type'] == 'tool_call') {
+        //agent 翻书中间轮：assistant（content=null + tool_calls 原样）
+        //——与首轮请求的 assistant 消息字节级一致，缓存前缀延续
+        final toolCalls = (row['tool_calls'] as List<dynamic>?)
+            ?.map((e) => e as Map<String, dynamic>)
+            .toList();
+        mapped.add(PromptMessage('assistant', null, toolCalls, null));
+        continue;
+      }
+      if (row['type'] == 'tool') {
+        //tool 消息：优先用行内快照 content（执行失败场景），否则按指针物化读盘
+        //（成功场景只存指针不存正文——教材未改则物化结果与首轮一致，缓存延续）
+        final snap = row['content'] as String?;
+        final content = snap ??
+            PromptBuilder.executeTextbookTool(
+                  courseDir,
+                  row['file'] as String? ?? '',
+                  row['section'] as String? ?? '',
+                ) ??
+            '【教材】内容已不可用（文件可能被移除）';
+        mapped.add(
+          PromptMessage('tool', content, null, row['tool_call_id'] as String?),
+        );
+        continue;
+      }
       if (row['type'] != 'message') continue; //meta 不映射
       final isUser = row['role'] == 'user';
       var content = row['content'] as String? ?? '';
@@ -303,7 +371,7 @@ class PromptBuilder {
     return mapped;
   }
 
-  List<Map<String, String>> _compose(
+  List<Map<String, dynamic>> _compose(
     String system,
     List<PromptMessage> history,
   ) {
@@ -321,7 +389,7 @@ class PromptBuilder {
 
   ///教学（上课对话 / 课前问候 / 下课总结）：全量注入。
   ///dispatch 非空时（课前问候/下课总结）追加一条 user 调度指令，不写入 CHAT。
-  Future<List<Map<String, String>>> teaching({
+  Future<List<Map<String, dynamic>>> teaching({
     required String courseDir,
     required String chatPath,
     required String tutorName,
@@ -359,7 +427,7 @@ class PromptBuilder {
   ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教材目录（仅目录，
   ///需要某节内容时 @read，成本从每轮 8k 降到几百）；不注入状态与日期。
   ///写入目标为下一课文件（新开课区间的交流段），群聊总在上一课文件尾，历史天然不含群聊。
-  Future<List<Map<String, String>>> qa({
+  Future<List<Map<String, dynamic>>> qa({
     required String courseDir,
     required String chatPath,
     required String tutorName,
@@ -384,7 +452,7 @@ class PromptBuilder {
 
   ///聊天（idle + toggle 激活）：聊天规则 + 三位导师档案；不注入状态、日期与教材。
   ///chatPath 由调用方指向群聊讨论的落档文件（本课文件尾，含教学全程与群聊），历史即该文件全量。
-  Future<List<Map<String, String>>> social({
+  Future<List<Map<String, dynamic>>> social({
     required String courseDir,
     required String chatPath,
   }) async {
@@ -401,7 +469,7 @@ class PromptBuilder {
   ///「其他」字段提炼（关系页编辑入口按钮，非对话场景）：
   ///提炼规则作 system，最近课次留档全文作 user 消息。
   ///不注入导师身份/学习者档案——避免用旧 extra 与单一导师视角影响提炼。
-  Future<List<Map<String, String>>> learnerExtra({
+  Future<List<Map<String, dynamic>>> learnerExtra({
     required String chatPath,
   }) async {
     final rule = await _prompt('learner_extra.md');
@@ -410,7 +478,7 @@ class PromptBuilder {
   }
 
   ///导师群聊生成（课后更新完成后自动）：群聊规范 + 三位导师档案 + 本课对话 + 调度指令。
-  Future<List<Map<String, String>>> groupChat({
+  Future<List<Map<String, dynamic>>> groupChat({
     required String courseDir,
     required String chatPath,
     String? dispatch,
@@ -430,7 +498,7 @@ class PromptBuilder {
   }
 
   ///课后更新：更新指令（含 PROGRESS 规范）+ 现有知识点清单 + 本课导师档案 + 本课对话。
-  Future<List<Map<String, String>>> update({
+  Future<List<Map<String, dynamic>>> update({
     required String courseDir,
     required String chatPath,
     required String tutorName,

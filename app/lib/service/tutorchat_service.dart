@@ -106,11 +106,12 @@ class TutorChatService {
     required String course,
     String? lessonPath,
     required String scene,
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     bool jsonMode = false,
     bool stream = true,
     int? maxTokens, //JSON 场景防截断
     String? thinkingEffort, //思考档位透传（更新/群聊用 'low'：保指令遵循，砍思考量）
+    List<Map<String, dynamic>>? tools, //OpenAI 兼容 tools 定义（agent 翻书）；null=不带
     void Function(String delta)? onDelta,
     String? label,
   }) async {
@@ -121,6 +122,7 @@ class TutorChatService {
       stream: stream,
       maxTokens: maxTokens,
       thinkingEffort: thinkingEffort,
+      tools: tools,
       onDelta: onDelta,
       label: label,
     );
@@ -335,14 +337,26 @@ class TutorChatService {
               tutorName: responder,
             );
 
-      final result = await _chatLogged(
-        course: courseName,
-        lessonPath: path,
-        scene: social ? '闲聊' : '问答',
-        messages: messages,
-        stream: true,
-        label: social ? '闲聊' : '问答',
-      );
+      //qa 走 agent 翻书（教材按需载入：仅注入目录，需要哪节读哪节——省 token 核心）；
+      //social 纯文本不带工具
+      final result = social
+          ? await _chatLogged(
+              course: courseName,
+              lessonPath: path,
+              scene: '闲聊',
+              messages: messages,
+              stream: true,
+              label: '闲聊',
+            )
+          : await _chatWithTextbook(
+              courseName: courseName,
+              courseDir: courseDir,
+              path: path,
+              tutor: responder,
+              scene: '问答',
+              messages: messages,
+              label: '问答',
+            );
 
       final (name, text) = social
           ? _parseReplyLine(
@@ -356,6 +370,109 @@ class TutorChatService {
     } finally {
       _setBusy(courseName, '');
     }
+  }
+
+  // —— agent 翻书（按需载入教材，对齐 pi agent harness）——
+  //请求带 read_textbook 工具 → 响应含 tool_calls → 执行（读盘切节）→ 落档 tool_call/tool
+  //指针行 → 以 tool 消息追加上下文 → 再请求，循环直到无翻书（上限 maxRounds 轮，末轮不带
+  //工具强制出文本）。中间轮次只落指针不落正文：下次请求重放时物化回原样 → 前缀缓存延续。
+  //返回最后一轮（纯文本）的 LlmResult；翻书轮次夹带的文本丢弃（罕见，模型以翻书为主）。
+  //
+  //思考模式约束（DeepSeek 2026-09 文档）：带 tools 的请求必须完整回传历史 reasoning_content，
+  //否则 400——本层落档从未存过 reasoning_content，故带 tools 的教学/问答/问候统一显式
+  //thinking disabled（非思考模式工具调用完全正常；教学口语回复也不需要思考链）。
+  Future<LlmResult> _chatWithTextbook({
+    required String courseName,
+    required String courseDir,
+    required String path, //落档路径（与 messages 来源文件一致）
+    required String tutor, //busy 文案与 tool 行 name
+    required String scene,
+    required List<Map<String, dynamic>> messages,
+    String? label,
+    int maxRounds = 4,
+  }) async {
+    var current = messages;
+    var result = const LlmResult(text: '');
+    for (var round = 0; round < maxRounds; round++) {
+      final isLast = round == maxRounds - 1;
+      result = await _chatLogged(
+        course: courseName,
+        lessonPath: path,
+        scene: scene,
+        messages: current,
+        stream: true,
+        tools: isLast ? null : PromptBuilder.textbookToolDefs,
+        thinkingEffort: 'disabled', //带 tools 必须思考关闭（见上注释）
+        label: label,
+      );
+      if (result.toolCalls.isEmpty) return result;
+
+      //翻书轮次：落档 assistant(tool_calls) 行（tool_calls 原样，重放透传保持字节一致）
+      await _storage.appendChatMessage(path, {
+        'type': 'tool_call',
+        'role': 'assistant',
+        'name': tutor,
+        'time': _now(),
+        'tool_calls': result.toolCalls,
+      });
+      _setBusy(courseName, '$tutor 正在翻阅教材…');
+
+      //assistant 消息用与重放相同的 PromptMessage 构造（键序一致，缓存前缀不碎）
+      current = [
+        ...current,
+        PromptMessage('assistant', null, result.toolCalls, null).toMap(),
+      ];
+      for (final call in result.toolCalls) {
+        final id = call['id'] as String? ?? '';
+        final fn = call['function'] as Map<String, dynamic>?;
+        String? file, section, content;
+        try {
+          final args =
+              jsonDecode(fn?['arguments'] as String? ?? '{}')
+                  as Map<String, dynamic>;
+          file = args['file'] as String?;
+          section = args['section'] as String?;
+          if (file == null || section == null) {
+            throw const FormatException('缺少 file 或 section');
+          }
+          content = PromptBuilder.executeTextbookTool(courseDir, file, section);
+        } catch (e) {
+          content = null;
+        }
+        if (content == null) {
+          //未找到/参数错：错误文本作为快照落档（重放直接用，不再物化）
+          final err = file == null || section == null
+              ? '【教材】read_textbook 参数解析失败，请核对 file 与 section。'
+              : '【教材】未找到「$file > $section」，请对照【教材目录】中的标题重新调用。';
+          await _storage.appendChatMessage(path, {
+            'type': 'tool',
+            'tool_call_id': id,
+            'name': tutor,
+            'time': _now(),
+            'content': err,
+          });
+          current = [
+            ...current,
+            PromptMessage('tool', err, null, id).toMap(),
+          ];
+        } else {
+          //成功：只落指针（file/section），重放时物化读盘
+          await _storage.appendChatMessage(path, {
+            'type': 'tool',
+            'tool_call_id': id,
+            'name': tutor,
+            'time': _now(),
+            'file': file,
+            'section': section,
+          });
+          current = [
+            ...current,
+            PromptMessage('tool', content, null, id).toMap(),
+          ];
+        }
+      }
+    }
+    return result;
   }
 
   // —— 场景 2：上课对话（ongoing + 用户消息）——
@@ -388,12 +505,14 @@ class TutorChatService {
         chatPath: path,
         tutorName: tutor,
       );
-      final result = await _chatLogged(
-        course: courseName,
-        lessonPath: path,
+      //agent 翻书：请求带 read_textbook 工具，需要时导师按需读教材节追加上下文
+      final result = await _chatWithTextbook(
+        courseName: courseName,
+        courseDir: courseDir,
+        path: path,
+        tutor: tutor,
         scene: '上课',
         messages: messages,
-        stream: true,
         label: '上课',
       );
       await _appendTutor(path, tutor, result.text, 'teaching');
@@ -426,12 +545,14 @@ class TutorChatService {
         tutorName: tutor,
         dispatch: dispatch,
       );
-      final result = await _chatLogged(
-        course: courseName,
-        lessonPath: path,
+      //agent 翻书（问候也可按需翻教材——如商定今日内容时查阅目录对应节）
+      final result = await _chatWithTextbook(
+        courseName: courseName,
+        courseDir: courseDir,
+        path: path,
+        tutor: tutor,
         scene: '问候',
         messages: messages,
-        stream: true,
         label: '问候',
       );
       await _appendTutor(path, tutor, result.text, 'teaching');
