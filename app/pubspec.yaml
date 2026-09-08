@@ -66,9 +66,7 @@ flutter:
   # To add assets to your application, add an assets section, like this:
   assets:
     - assets/prompts/
-    - assets/worlds/教令院/
-    - assets/worlds/星光咖啡馆/
-    - assets/worlds/秀知院研究所/
+    - assets/worlds/杏坛/
 
   # 思源黑体（Source Han Sans CN）：全局中文字体，Regular + Bold 两字重
   fonts:

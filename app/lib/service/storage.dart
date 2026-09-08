@@ -44,7 +44,7 @@ class StorageService {
     final names = <String>[];
     for (final entity in await worldDir.list().toList()) {
       if (entity is! Directory) continue; //只收子目录，混入的散文件不算世界
-      //从完整路径中取出最后一段，即世界名：...\世界\教令院 → 教令院
+      //从完整路径中取出最后一段，即世界名：...\世界\杏坛 → 杏坛
       names.add(entity.path.split(Platform.pathSeparator).last);
     }
     return names;
@@ -716,7 +716,7 @@ class StorageService {
 
   //导入全部内置世界，返回汇总消息
   Future<String> importBuiltinWorlds() async {
-    const builtinWorlds = ['教令院', '星光咖啡馆', '秀知院研究所']; //内置世界清单，对应assets/worlds/
+    const builtinWorlds = ['杏坛']; //内置世界清单，对应assets/worlds/
     final imported = <String>[];
     final skipped = <String>[];
 
