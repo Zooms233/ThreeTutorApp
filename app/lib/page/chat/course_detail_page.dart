@@ -136,7 +136,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     );
   }
 
-  //和导师的关系入口 → 关系页
+  //课程资料入口（学习者信息/教学大纲与材料/导师关系）→ 课程资料页
   Widget _buildRelationRow() {
     return Container(
       color: Colors.white,
@@ -144,7 +144,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
       child: Material(
         color: Colors.transparent, //ListTile 自己的 Material：水波纹不被白底 ColoredBox 吞（Flutter 断言）
         child: ListTile(
-          title: const Text('和导师的关系'),
+          title: const Text('课程资料'),
           trailing: const Icon(Icons.chevron_right, color: Color(0xFFC8C8C8)),
           onTap: () {
             Navigator.push(
