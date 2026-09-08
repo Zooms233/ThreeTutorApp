@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show ValueNotifier;
+import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:tutor_chat/service/llm_client.dart';
@@ -102,6 +102,103 @@ class TutorChatService {
   //统一对话出口：透传协议层；成功后把 usage 追加进数据根 USAGE.jsonl。设置页「用量统计」
   //现读该账本聚合展示，账本文件即唯一事实。失败重试的中间请求拿不到 usage，无法入账
   //（账本只记成功请求）；连通性检验（ping）也不计。
+
+  //临时测试（验证上下文拼接，验证后可删）：打印每轮实际发送的 messages 结构快照——
+  //只打印角色序列 + 简化标签（提示词→长度、用户→编号+头30字、翻书→工具参数、教材→长度），
+  //不打印全文，观察拼接顺序是否如预期（追加/重放/缓存延续）。
+  static const bool _traceEnabled = true;
+
+  void _traceMessages(
+    List<Map<String, dynamic>> messages, {
+    List<Map<String, dynamic>>? tools,
+    String? tag,
+  }) {
+    if (!_traceEnabled) return;
+    final buf = StringBuffer();
+    var userNo = 0;
+    for (var i = 0; i < messages.length; i++) {
+      final m = messages[i];
+      final role = m['role'] as String? ?? '?';
+      final content = m['content'];
+      switch (role) {
+        case 'system':
+          buf.writeln('  [$i] system（${_describeSystem(content as String)}）');
+        case 'user':
+          userNo++;
+          final head = (content as String? ?? '').replaceAll('\n', ' ').trim();
+          buf.writeln(
+            '  [$i] 用户消息$userNo「${head.length > 30 ? '${head.substring(0, 30)}…' : head}」',
+          );
+        case 'assistant':
+          final calls = m['tool_calls'];
+          if (calls is List && calls.isNotEmpty) {
+            final fn =
+                (calls.first as Map<String, dynamic>)['function']
+                    as Map<String, dynamic>?;
+            String? file, section;
+            try {
+              final args = jsonDecode(fn?['arguments'] as String? ?? '{}')
+                  as Map<String, dynamic>;
+              file = args['file'] as String?;
+              section = args['section'] as String?;
+            } catch (_) {}
+            buf.writeln('  [$i] assistant（翻书：$file > $section）');
+          } else {
+            final head = (content as String? ?? '').replaceAll('\n', ' ').trim();
+            buf.writeln(
+              '  [$i] 导师回复「${head.length > 30 ? '${head.substring(0, 30)}…' : head}」',
+            );
+          }
+        case 'tool':
+          buf.writeln('  [$i] tool（教材，${(content as String).length}字）');
+        default:
+          buf.writeln('  [$i] $role');
+      }
+    }
+    debugPrint(
+      '[trace] ${tag ?? ''} ${tools == null ? '不带工具' : '带工具'} ${messages.length}条\n$buf',
+    );
+  }
+
+  //system 内容描述：识别规则文件 + 拼装块（不同场景的 system 组合不同，便于观察拼接来源）
+  String _describeSystem(String content) {
+    final blocks = <String>[];
+    var rule = '?';
+    //规则文件按标题特征识别（learner_extra 无 # 标题，用首句特征）
+    if (content.contains('# 教学规则')) {
+      rule = 'teaching.md';
+      blocks.add('教学规则');
+    } else if (content.contains('# 问答规则')) {
+      rule = 'qa.md';
+      blocks.add('问答规则');
+    } else if (content.contains('# 聊天规则')) {
+      rule = 'social.md';
+      blocks.add('聊天规则');
+    } else if (content.contains('# 导师群聊规范')) {
+      rule = 'group.md';
+      blocks.add('群聊规范');
+    } else if (content.contains('# 课后更新任务')) {
+      rule = 'update.md';
+      blocks.add('更新指令');
+    } else if (content.contains('从课次留档中提炼')) {
+      rule = 'learner_extra.md';
+      blocks.add('提炼规则');
+    } else {
+      rule = '?';
+    }
+    //拼装块识别（teaching/qa 的档案块带导师名，一并显示）
+    final identity = RegExp(r'你是(.+?)。下面是你的档案').firstMatch(content);
+    if (identity != null) blocks.add('导师档案[${identity.group(1)}]');
+    if (content.contains('【学习者】')) blocks.add('学习者');
+    if (content.contains('【课程状态】')) blocks.add('状态');
+    if (content.contains('【知识点进度】')) blocks.add('进度');
+    if (content.contains('【现有知识点】')) blocks.add('知识点清单');
+    if (content.contains('今天是')) blocks.add('日期');
+    if (content.contains('今日教材进度')) blocks.add('教材当前节');
+    if (content.contains('【教材目录】')) blocks.add('目录');
+    return '$rule：${blocks.join('+')}（${content.length}字）';
+  }
+
   Future<LlmResult> _chatLogged({
     required String course,
     String? lessonPath,
@@ -114,7 +211,9 @@ class TutorChatService {
     List<Map<String, dynamic>>? tools, //OpenAI 兼容 tools 定义（agent 翻书）；null=不带
     void Function(String delta)? onDelta,
     String? label,
+    String? traceTag, //临时测试：请求轮次标识（如 上课#1），打印消息结构快照
   }) async {
+    _traceMessages(messages, tools: tools, tag: traceTag); //临时测试：验证上下文拼接
     final result = await _client.chat(
       config: await _config(),
       messages: messages,
@@ -404,6 +503,7 @@ class TutorChatService {
         tools: isLast ? null : PromptBuilder.textbookToolDefs,
         thinkingEffort: 'disabled', //带 tools 必须思考关闭（见上注释）
         label: label,
+        traceTag: '$label#${round + 1}', //临时测试：轮次标识（验证上下文拼接）
       );
       if (result.toolCalls.isEmpty) return result;
 
