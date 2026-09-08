@@ -332,6 +332,33 @@ class StorageService {
     return files;
   }
 
+  //建课页「从最近课程提炼」素材：跨课程收集课次文件，每门课程忽略最新 1 篇
+  //（多为下课流程刚自动创建的空下一课文件），余下按文件创建时间取最新 3 篇。
+  //不看课程类别，3 篇可同源一门课。返回按创建时间新→旧；
+  //课程名供记账归属，全应用无可用素材返回空列表
+  Future<List<({String course, String path})>> recentLessonsAcrossCourses() async {
+    final candidates = <({String course, String path, DateTime time})>[];
+    for (final course in await listCourses()) {
+      final chatDir = Directory('${(await getCourseDir(course)).path}/CHAT');
+      if (!chatDir.existsSync()) continue;
+      final files = <({String path, DateTime time})>[];
+      for (final entity in chatDir.listSync()) {
+        if (entity is! File || !entity.path.endsWith('.jsonl')) continue;
+        files.add((path: entity.path, time: (await entity.stat()).changed)); //Windows 下即创建时间
+      }
+      files.sort((a, b) => b.time.compareTo(a.time)); //新→旧
+      if (files.length <= 1) continue; //仅 1 篇：恰为被忽略的最新 1 篇
+      for (final f in files.skip(1)) {
+        candidates.add((course: course, path: f.path, time: f.time));
+      }
+    }
+    candidates.sort((a, b) => b.time.compareTo(a.time));
+    return candidates
+        .take(3)
+        .map((c) => (course: c.course, path: c.path))
+        .toList();
+  }
+
   //读取单个课次文件的条目（兼容旧数据：message 缺 phase 默认按上课消息处理）
   Future<List<Map<String, dynamic>>> loadChatFile(String path) async {
     final entries = <Map<String, dynamic>>[];

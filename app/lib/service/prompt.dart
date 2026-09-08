@@ -620,15 +620,25 @@ class PromptBuilder {
     return _compose(system, await _mapHistory(courseDir, chatPath));
   }
 
-  ///「其他」字段提炼（关系页编辑入口按钮，非对话场景）：
-  ///提炼规则作 system，最近课次留档全文作 user 消息。
+  ///「其他」字段提炼（关系页/建课页入口按钮，非对话场景）：
+  ///提炼规则作 system，一或多份课次留档全文拼接作 user 消息（新→旧，每份带课程·课次头）。
   ///不注入导师身份/学习者档案——避免用旧 extra 与单一导师视角影响提炼。
   Future<List<Map<String, dynamic>>> learnerExtra({
-    required String chatPath,
+    required List<({String course, String path})> lessons,
+    bool fromOtherCourse = false, //建课页跨课程提炼：追加“来自另一门课程”提示
   }) async {
-    final rule = await _prompt('learner_extra.md');
-    final history = await File(chatPath).readAsString();
-    return _compose(rule, [PromptMessage('user', history)]);
+    var rule = await _prompt('learner_extra.md');
+    if (fromOtherCourse) {
+      rule = '$rule\n\n注意：留档来自学习者另一门（或另外多门）课程的最近课次，'
+          '请提炼可跨课程迁移的通用学习者画像（讲解偏好、学习习惯），忽略具体课程的知识内容。';
+    }
+    final parts = <String>[];
+    for (final l in lessons) {
+      final name = l.path.split(RegExp(r'[/\\]')).last; //第N课.jsonl
+      final text = await File(l.path).readAsString();
+      parts.add('【课程：${l.course} · $name】\n$text');
+    }
+    return _compose(rule, [PromptMessage('user', parts.join('\n\n'))]);
   }
 
   ///导师群聊生成（课后更新完成后自动）：群聊规范 + 三位导师档案 + 本课对话 + 调度指令。

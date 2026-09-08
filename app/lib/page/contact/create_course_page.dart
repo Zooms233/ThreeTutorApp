@@ -5,6 +5,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:three_tutor/page/chat/group_chat_page.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
 
 //创建课程表单：从导师资料页「创建群聊」进入
 //导师世界由发起的导师决定（不提供选择），完成即建课
@@ -26,6 +27,8 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
   String? _syllabusPath; //选中的教学大纲文件路径（可选，教学范围，仅一份）
   final List<String> _textbookPaths = []; //选中的教学材料文件路径（可选，可多份）
   bool _submitting = false; //提交中：防重复建课
+  bool _extracting = false; //提炼中：防重复触发提炼请求
+  bool _hasAnyLessons = false; //全应用是否有课次（无则「从最近课程提炼」置灰）
 
   //课程名 = 课程目录名，禁止文件系统非法字符
   static final _invalidChars = RegExp(r'[\\/:*?"<>|]');
@@ -72,6 +75,15 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
         final path = f.path;
         if (!_textbookPaths.contains(path)) _textbookPaths.add(path);
       }
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    //置灰判断：跨课程收素材（每门课忽略最新 1 篇，取最新 3 篇；不看课程类别）
+    StorageService().recentLessonsAcrossCourses().then((lessons) {
+      if (mounted) setState(() => _hasAnyLessons = lessons.isNotEmpty);
     });
   }
 
@@ -146,7 +158,13 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
               maxLines: 3,
               validator: _validateRequired,
             ),
-            _buildField('其他想向导师传达的内容', _extra, hint: '可选', maxLines: 3),
+            _buildField(
+              '其他想向导师传达的内容',
+              _extra,
+              hint: '可选，可从最近课程提炼',
+              maxLines: 3,
+              trailing: _buildExtractButton(),
+            ),
             _buildSyllabusRow(),
             _buildTextbooksRow(),
             const SizedBox(height: 24),
@@ -163,13 +181,14 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     );
   }
 
-  //白底输入块：灰色小字标签 + 无边框输入（微信表单风格）
+  //白底输入块：灰色小字标签 + 无边框输入（微信表单风格）；trailing 为 label 行右侧动作
   Widget _buildField(
     String label,
     TextEditingController controller, {
     String? hint,
     int maxLines = 1,
     String? Function(String?)? validator,
+    Widget? trailing,
   }) {
     return Container(
       color: Colors.white,
@@ -178,7 +197,12 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF808080))),
+          Row(
+            children: [
+              Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF808080))),
+              if (trailing != null) ...[const Spacer(), trailing],
+            ],
+          ),
           TextFormField(
             controller: controller,
             maxLines: maxLines,
@@ -280,6 +304,67 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
         ],
       ),
     );
+  }
+
+  //「从最近课程提炼」：跨课程扫全部课次、按文件创建时间取最新，提炼通用画像预填「其他」
+  //置灰：全应用无课次（无材料）或提炼中；结果整段替换输入框（用户看过/改过随建课落盘）
+  Widget _buildExtractButton() {
+    return TextButton.icon(
+      onPressed: !_hasAnyLessons || _extracting ? null : _extractExtra,
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      icon: _extracting
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.auto_awesome, size: 16),
+      label: Text(
+        _extracting ? '提炼中…' : '从最近课程提炼',
+        style: const TextStyle(fontSize: 13),
+      ),
+    );
+  }
+
+  Future<void> _extractExtra() async {
+    setState(() => _extracting = true);
+    try {
+      final draft = await ThreeTutorService().extractLearnerExtraAnyCourse();
+      if (!mounted) return;
+      setState(() => _extracting = false);
+      if (draft == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('暂无课次记录'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      if (draft.isEmpty || draft == '无') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('最近课次中没有值得记录的学习者特征'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      setState(() => _extra.text = draft);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _extracting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('提炼失败：$e'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   String _fileNameOf(String path) => path.split(Platform.pathSeparator).last;

@@ -248,16 +248,46 @@ class ThreeTutorService {
     return result;
   }
 
-  ///「其他」字段提炼（关系页编辑入口）：读最新课次留档全文 → LLM 提炼 → 返回草稿文本。
-  ///只预填不落盘（UI 把关后随保存写入）；无课次记录返回 null（调用方提示）。
+  ///「其他」字段提炼（关系页编辑入口）：读本课程课次留档 → LLM 提炼 → 返回草稿文本。
+  ///本课程内忽略最新 1 篇（多为下课流程刚创建的空下一课文件），余下按课次号新→旧取 3 篇。
+  ///只预填不落盘（UI 把关后随保存写入）；无可用素材（课次不足 2 篇）返回 null（调用方提示）。
   Future<String?> extractLearnerExtra({required String courseName}) async {
-    final files = await _storage.listChatFiles(courseName);
-    if (files.isEmpty) return null;
-    final path = files.last;
-    final messages = await _prompts.learnerExtra(chatPath: path);
+    final files = await _storage.listChatFiles(courseName); //旧→新
+    final lessons = files.length <= 1
+        ? <({String course, String path})>[]
+        : files.reversed
+              .skip(1) //跳过最新 1 篇
+              .take(3)
+              .map((p) => (course: courseName, path: p))
+              .toList();
+    if (lessons.isEmpty) return null;
+    final messages = await _prompts.learnerExtra(lessons: lessons);
     final result = await _chatLogged(
       course: courseName,
-      lessonPath: path,
+      lessonPath: lessons.first.path, //账记最新一篇
+      scene: '提炼',
+      messages: messages,
+      stream: false,
+      label: '提炼',
+    );
+    return result.text.trim();
+  }
+
+  ///「其他」字段跨课程提炼（建课页入口）：跨课程收素材（每门课忽略最新 1 篇空文件，
+  ///余下按文件创建时间取 3 篇）→ LLM 提炼通用画像 → 返回草稿文本。
+  ///只预填不落盘（表单把关后随建课写入）；记账归属最新一篇所属课程
+  ///（新课程目录尚不存在，且多素材请求以最新一篇为主要依据）。
+  ///无可用素材返回 null（调用方提示）。
+  Future<String?> extractLearnerExtraAnyCourse() async {
+    final lessons = await _storage.recentLessonsAcrossCourses();
+    if (lessons.isEmpty) return null;
+    final messages = await _prompts.learnerExtra(
+      lessons: lessons,
+      fromOtherCourse: true,
+    );
+    final result = await _chatLogged(
+      course: lessons.first.course, //账记最新一篇所属课程
+      lessonPath: lessons.first.path,
       scene: '提炼',
       messages: messages,
       stream: false,

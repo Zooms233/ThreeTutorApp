@@ -287,9 +287,10 @@ class _RelationPageState extends State<RelationPage> {
     );
     bool? saved; //对话框返回值（true=保存）；放在 try 外供 finally 后续判断
     try {
+      //置灰：忽略最新 1 篇（多为下课流程刚创建的空下一课文件）后无素材，或提炼中
       final hasLessons = (await StorageService().listChatFiles(
         widget.courseName,
-      )).isNotEmpty;
+      )).length >= 2;
       if (!mounted) return;
       var extracting = false; //提炼请求进行中（对话框内局部态，不走全局 busy Banner）
       saved = await showDialog<bool>(
@@ -336,7 +337,7 @@ class _RelationPageState extends State<RelationPage> {
                               if (draft == null) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
-                                    content: Text('暂无课次记录'),
+                                    content: Text('暂无可提炼的课次记录（需至少上完 1 课）'),
                                     duration: Duration(seconds: 2),
                                   ),
                                 );
