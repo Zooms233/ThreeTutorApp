@@ -1,10 +1,10 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/main.dart';
-import 'package:tutor_chat/page/chat/group_chat_page.dart';
-import 'package:tutor_chat/service/storage.dart';
-import 'package:tutor_chat/service/tutorchat_service.dart';
-import 'package:tutor_chat/widget/tutor_avatar.dart';
+import 'package:three_tutor/main.dart';
+import 'package:three_tutor/page/chat/group_chat_page.dart';
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //聊天页 = 会话列表：每行一个课程群聊（微信会话样式）
 //群名 + 最后一条消息预览 + 时间；点击进入群聊页；更名/删除入口在 AppBar 齿轮菜单
@@ -23,7 +23,7 @@ class _TabChatState extends State<TabChat> {
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
     //监听共享 busy 表：任一课程生成中，对应会话行预览位置显示绿色小字
-    TutorChatService.busyVersion.addListener(_onBusyChanged);
+    ThreeTutorService.busyVersion.addListener(_onBusyChanged);
     //IndexedStack 保活后本页 State 不随 tab 切换重建，需自行监听 tab 索引：
     //切回聊天 tab 即重扫（通讯录建课/更名后回来列表才不会是旧数据）
     HomePage.pageIndex.addListener(_onTabChanged);
@@ -32,7 +32,7 @@ class _TabChatState extends State<TabChat> {
 
   @override
   void dispose() {
-    TutorChatService.busyVersion.removeListener(_onBusyChanged);
+    ThreeTutorService.busyVersion.removeListener(_onBusyChanged);
     HomePage.pageIndex.removeListener(_onTabChanged);
     super.dispose();
   }
@@ -60,7 +60,7 @@ class _TabChatState extends State<TabChat> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('TutorChat'),
+        title: const Text('三人师'),
         actions: [
           //管理菜单（与通讯录页同款齿轮）：更名 / 删除群聊；建课入口仍在通讯录
           PopupMenuButton(
@@ -161,12 +161,12 @@ class _TabChatState extends State<TabChat> {
                     const SizedBox(height: 4),
                     //生成中：预览位置显示绿色小字（微信「对方正在输入…」同款）
                     Text(
-                      TutorChatService.busyLabelOf(name).isEmpty
+                      ThreeTutorService.busyLabelOf(name).isEmpty
                           ? preview
-                          : TutorChatService.busyLabelOf(name),
+                          : ThreeTutorService.busyLabelOf(name),
                       style: TextStyle(
                         fontSize: 14,
-                        color: TutorChatService.busyLabelOf(name).isEmpty
+                        color: ThreeTutorService.busyLabelOf(name).isEmpty
                             ? const Color(0xFF999999)
                             : const Color(0xFF07C160),
                       ),

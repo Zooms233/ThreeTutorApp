@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/page/usage_page.dart';
-import 'package:tutor_chat/service/llm_client.dart';
-import 'package:tutor_chat/service/storage.dart';
+import 'package:three_tutor/page/usage_page.dart';
+import 'package:three_tutor/service/llm_client.dart';
+import 'package:three_tutor/service/storage.dart';
 
 //设置页：API 配置
 class TabSetting extends StatefulWidget {

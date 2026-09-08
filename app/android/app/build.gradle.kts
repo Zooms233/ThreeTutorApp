@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.tutor_chat"
+    namespace = "github.zooms233.three_tutor"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.tutor_chat"
+        applicationId = "github.zooms233.three_tutor"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

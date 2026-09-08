@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/service/storage.dart';
+import 'package:three_tutor/service/storage.dart';
 
 //导师档案页：滚动展示导师完整档案
 class TutorProfilePage extends StatefulWidget {

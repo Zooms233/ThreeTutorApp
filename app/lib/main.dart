@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:tutor_chat/page/tab_chat.dart';
-import 'package:tutor_chat/page/tab_contact.dart';
-import 'package:tutor_chat/page/tab_setting.dart';
+import 'package:three_tutor/page/tab_chat.dart';
+import 'package:three_tutor/page/tab_contact.dart';
+import 'package:three_tutor/page/tab_setting.dart';
 
 Future<void> main() async {
   //在 await 之前初始化绑定（Android 权限申请用到了平台通道）
@@ -14,7 +14,7 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-//Android 上申请「所有文件访问」权限：数据存放在公共 Documents/TutorChat
+//Android 上申请「所有文件访问」权限：数据存放在公共 Documents/ThreeTutor
 //Windows 等其他平台无需权限，直接跳过
 Future<void> _ensureStoragePermission() async {
   if (!Platform.isAndroid) return;
@@ -37,7 +37,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TutorChat',
+      title: '三人师',
       debugShowCheckedModeBanner:
           false, //隐藏右上角 DEBUG 横幅（仅 debug 运行时显示，release 本来就没有）
       theme: ThemeData(

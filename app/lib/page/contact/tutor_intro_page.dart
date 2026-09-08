@@ -1,10 +1,10 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/page/chat/group_chat_page.dart';
-import 'package:tutor_chat/page/contact/create_course_page.dart';
-import 'package:tutor_chat/widget/tutor_avatar.dart';
-import 'package:tutor_chat/page/contact/tutor_profile_page.dart';
-import 'package:tutor_chat/service/storage.dart';
+import 'package:three_tutor/page/chat/group_chat_page.dart';
+import 'package:three_tutor/page/contact/create_course_page.dart';
+import 'package:three_tutor/widget/tutor_avatar.dart';
+import 'package:three_tutor/page/contact/tutor_profile_page.dart';
+import 'package:three_tutor/service/storage.dart';
 
 //导师资料页：微信联系人样式，从这里进档案、创建课程或进入已有课程群聊
 class TutorIntroPage extends StatefulWidget {

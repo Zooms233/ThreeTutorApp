@@ -5,17 +5,17 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:tutor_chat/main.dart';
-import 'package:tutor_chat/page/chat/course_detail_page.dart';
-import 'package:tutor_chat/service/llm_client.dart' show LlmException;
-import 'package:tutor_chat/service/storage.dart';
-import 'package:tutor_chat/service/tutorchat_service.dart';
-import 'package:tutor_chat/widget/tutor_avatar.dart';
+import 'package:three_tutor/main.dart';
+import 'package:three_tutor/page/chat/course_detail_page.dart';
+import 'package:three_tutor/service/llm_client.dart' show LlmException;
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
 //按需加载：优先渲染最近课次，上滑到顶加载更早课次（微信行为）
 //收发接线：judgeFlow 判定三态 → 对应服务方法；生成期间输入框 hint 显示忙碌文案并锁定输入框，
-//会话列表预览同步显示（busy 静态表，见 TutorChatService）
+//会话列表预览同步显示（busy 静态表，见 ThreeTutorService）
 class GroupChatPage extends StatefulWidget {
   const GroupChatPage({super.key, required this.courseName});
 
@@ -71,14 +71,14 @@ class _GroupChatPageState extends State<GroupChatPage> {
   String _learnerName = ''; //用户称呼（用户消息显示与写档用）
   //生成中文案改由 service 静态 busy 表持有（跨实例共享，退出重进不丢）；
   //页面只读（getter），不再维护本地副本——避免双轨不同步
-  String get _busyLabel => TutorChatService.busyLabelOf(widget.courseName);
+  String get _busyLabel => ThreeTutorService.busyLabelOf(widget.courseName);
   String _latestStatus = ''; //最新课次 meta.status（toggle 显示判定；''=无课次）
   int _lessons = 0; //累计课时（toggle 显示判定：idle 且 ≥1）
   bool _socialMode = false; //课后交流切换：false=问答（默认）/ true=群聊讨论；仅会话内存不落盘
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
-  final _service = TutorChatService(); //编排层：三态判定 + 各场景收发与上下课
+  final _service = ThreeTutorService(); //编排层：三态判定 + 各场景收发与上下课
 
   bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
 
@@ -86,13 +86,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
     _scrollController.addListener(_onScroll); //滑到顶部附近时加载更早课次
-    TutorChatService.busyVersion.addListener(_onBusyChanged); //跨页面生成中状态同步
+    ThreeTutorService.busyVersion.addListener(_onBusyChanged); //跨页面生成中状态同步
     _load();
   }
 
   @override
   void dispose() {
-    TutorChatService.busyVersion.removeListener(_onBusyChanged); //移除生成中状态监听
+    ThreeTutorService.busyVersion.removeListener(_onBusyChanged); //移除生成中状态监听
     _scrollController.dispose(); //页面销毁时释放滚动控制器
     _inputController.dispose(); //释放输入控制器，避免内存泄漏
     super.dispose();
@@ -209,7 +209,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     if (text.isEmpty || _busy) return;
     _inputController.clear();
 
-    TutorChatService.setBusyForCourse(widget.courseName, '正在输入中…');
+    ThreeTutorService.setBusyForCourse(widget.courseName, '正在输入中…');
     try {
       //三态判定：idle+未上过课 → 问答；idle+toggle 激活 → 群聊讨论；ongoing → 上课对话
       final flow = await _service.judgeFlow(
@@ -263,7 +263,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _scrollToBottom();
     } finally {
       //正常路径由 service 端 finally 清；此处兜底判定阶段异常（_setBusy 幂等，重清无害）
-      TutorChatService.setBusyForCourse(widget.courseName, '');
+      ThreeTutorService.setBusyForCourse(widget.courseName, '');
     }
   }
 
@@ -292,7 +292,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    TutorChatService.setBusyForCourse(widget.courseName, '群里正在聊天…');
+    ThreeTutorService.setBusyForCourse(widget.courseName, '群里正在聊天…');
     try {
       final cleared = await _service.clearGroupChat(
         courseName: widget.courseName,
@@ -318,7 +318,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       if (!mounted) return;
       _toast('群聊生成失败：$e');
     } finally {
-      TutorChatService.setBusyForCourse(widget.courseName, '');
+      ThreeTutorService.setBusyForCourse(widget.courseName, '');
     }
   }
   */
@@ -335,7 +335,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       final lesson = await StorageService().startNewLesson(widget.courseName);
       if (!mounted) return;
       //建档即占 busy：问候请求发出前输入框已锁（service.startLesson 内部再次设置同文案）
-      TutorChatService.setBusyForCourse(
+      ThreeTutorService.setBusyForCourse(
         widget.courseName,
         '${lesson['tutor']} 正在输入中…',
       );
@@ -355,7 +355,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       final lesson = await StorageService().getCurrentLesson(widget.courseName);
       if (!mounted) return;
       //建档即占 busy：总结请求发出前输入框已锁（service.endLesson 内部再次设置同文案）
-      TutorChatService.setBusyForCourse(
+      ThreeTutorService.setBusyForCourse(
         widget.courseName,
         '${lesson['tutor']} 正在输入中…',
       );

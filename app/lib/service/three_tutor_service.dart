@@ -5,15 +5,15 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
 
-import 'package:tutor_chat/service/llm_client.dart';
-import 'package:tutor_chat/service/prompt.dart';
-import 'package:tutor_chat/service/storage.dart';
+import 'package:three_tutor/service/llm_client.dart';
+import 'package:three_tutor/service/prompt.dart';
+import 'package:three_tutor/service/storage.dart';
 
 //编排层：五场景的 读档 → 组装 → 调用 → 写档 → 状态推进（04-LLM调用.md 场景与载入）。
 //先写后说：用户消息落档后才发请求；回复落档后 UI 才解锁输入框。
 //LLM 只产出文本；status 推进、日期计算、档案轮换等确定性计算全部在本层完成。
 
-class TutorChatService {
+class ThreeTutorService {
   final StorageService _storage;
   final PromptBuilder _prompts;
   final LlmClient _client;
@@ -45,7 +45,7 @@ class TutorChatService {
   static void setBusyForCourse(String courseName, String label) =>
       _setBusy(courseName, label);
 
-  TutorChatService({
+  ThreeTutorService({
     StorageService? storage,
     PromptBuilder? prompts,
     LlmClient? client,

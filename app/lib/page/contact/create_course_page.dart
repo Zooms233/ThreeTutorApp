@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/page/chat/group_chat_page.dart';
-import 'package:tutor_chat/service/storage.dart';
+import 'package:three_tutor/page/chat/group_chat_page.dart';
+import 'package:three_tutor/service/storage.dart';
 
 //创建课程表单：从导师资料页「创建群聊」进入
 //导师世界由发起的导师决定（不提供选择），完成即建课

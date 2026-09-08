@@ -1,8 +1,8 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/page/contact/tutor_intro_page.dart';
-import 'package:tutor_chat/service/storage.dart';
-import 'package:tutor_chat/widget/tutor_avatar.dart';
+import 'package:three_tutor/page/contact/tutor_intro_page.dart';
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/widget/tutor_avatar.dart';
 
 class TabContact extends StatefulWidget {
   const TabContact({super.key});
@@ -111,7 +111,7 @@ class _TabContactState extends State<TabContact> {
     return Scaffold(
       appBar: AppBar(
         //背景与滚动行为继承全局 appBarTheme（微信浅灰顶栏）
-        title: const Text('TutorChat'),
+        title: const Text('三人师'),
         actions: [
           PopupMenuButton(
             icon: const Icon(Icons.settings),

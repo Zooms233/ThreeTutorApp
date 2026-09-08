@@ -1,4 +1,4 @@
-package com.example.tutor_chat
+package github.zooms233.three_tutor
 
 import io.flutter.embedding.android.FlutterActivity
 

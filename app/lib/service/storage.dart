@@ -5,11 +5,11 @@ import 'package:path_provider/path_provider.dart';
 
 class StorageService {
   //数据根目录（按平台）：
-  //Windows = E:\Documents\TutorChat —— 个人偏好位置，资源管理器直接可见、便于手动备份
-  //Android = 公共 Documents/TutorChat —— 需「所有文件访问」权限（manifest 已声明，首次启动申请）
+  //Windows = E:\Documents\ThreeTutor —— 个人偏好位置，资源管理器直接可见、便于手动备份
+  //Android = 公共 Documents/ThreeTutor —— 需「所有文件访问」权限（manifest 已声明，首次启动申请）
   //其他平台回退应用私有目录
-  static const _windowsRoot = r'E:\Documents\TutorChat';
-  static const _androidRoot = '/storage/emulated/0/Documents/TutorChat';
+  static const _windowsRoot = r'E:\Documents\ThreeTutor';
+  static const _androidRoot = '/storage/emulated/0/Documents/ThreeTutor';
 
   //返回本应用的数据根目录（不存在则创建）
   Future<Directory> getRootDir() async {

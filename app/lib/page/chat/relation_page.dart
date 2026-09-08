@@ -1,7 +1,7 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/service/storage.dart';
-import 'package:tutor_chat/service/tutorchat_service.dart';
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
 
 //课程资料页（原关系页）：学习者信息 + 教学大纲/材料管理 + 导师关系
 //建课字段的建后管理入口：学习者（称呼/动力/其他）与大纲/材料均与建课表单一致；
@@ -327,7 +327,7 @@ class _RelationPageState extends State<RelationPage> {
                         : () async {
                             setDialogState(() => extracting = true);
                             try {
-                              final draft = await TutorChatService()
+                              final draft = await ThreeTutorService()
                                   .extractLearnerExtra(
                                     courseName: widget.courseName,
                                   );

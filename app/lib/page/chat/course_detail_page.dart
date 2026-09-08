@@ -1,8 +1,8 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
-import 'package:tutor_chat/page/chat/relation_page.dart';
-import 'package:tutor_chat/service/storage.dart';
-import 'package:tutor_chat/service/tutorchat_service.dart';
+import 'package:three_tutor/page/chat/relation_page.dart';
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
 
 //课程详情页：状态四项 + 知识点进度 + 关系入口（原课程信息页与课程进度页合并）
 class CourseDetailPage extends StatefulWidget {
@@ -25,13 +25,13 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   void initState() {
     super.initState(); //先执行 Flutter 自身的初始化
     //监听共享 busy 表：课程生成中（上课/下课/群聊全程）按钮禁用，完成即恢复
-    TutorChatService.busyVersion.addListener(_onBusyChanged);
+    ThreeTutorService.busyVersion.addListener(_onBusyChanged);
     _load();
   }
 
   @override
   void dispose() {
-    TutorChatService.busyVersion.removeListener(_onBusyChanged);
+    ThreeTutorService.busyVersion.removeListener(_onBusyChanged);
     super.dispose();
   }
 
@@ -40,7 +40,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   }
 
   //本课程是否生成中（任何场景：上课/问答/问候/总结/更新/群聊全程）
-  bool get _courseBusy => TutorChatService.busyLabelOf(widget.courseName).isNotEmpty;
+  bool get _courseBusy => ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty;
 
   //读取 STATE、PROGRESS 与最新课次 meta 并刷新
   Future<void> _load() async {
