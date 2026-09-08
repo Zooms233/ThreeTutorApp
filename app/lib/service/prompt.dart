@@ -189,6 +189,40 @@ class PromptBuilder {
   //教学用：知识点清单（短名 + 最新状态块）
   String _progressBlock(List<Map<String, dynamic>> rows) {
     if (rows.isEmpty) return '【知识点进度】\n（暂无，尚未登记任何知识点）';
+    final now = DateTime.now();
+    final today =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+    //到期名单（复习调度归 app，导师只管表达）：review ≤ 今日，按 ✗ > △ > 到期早的 ✓
+    //排序取 top 3 —— 未入选的到期项不标（“没标=本节不复习”，防停学期积压淹没教学）
+    String latestOf(Map<String, dynamic> row) =>
+        (row['records'] as List? ?? const []).isEmpty
+        ? ''
+        : ((row['records'] as List).last as Map<String, dynamic>)['status'] as String? ?? '';
+    String reviewOf(Map<String, dynamic> row) =>
+        (row['records'] as List? ?? const []).isEmpty
+        ? ''
+        : ((row['records'] as List).last as Map<String, dynamic>)['review'] as String? ?? '';
+    final due = rows
+        .where((r) {
+          final review = reviewOf(r);
+          return review.isNotEmpty && review.compareTo(today) <= 0;
+        })
+        .toList()
+      ..sort((a, b) {
+        int weight(Map<String, dynamic> r) => switch (latestOf(r)) {
+          '✗' => 0,
+          '△' => 1,
+          _ => 2,
+        };
+        final c = weight(a).compareTo(weight(b));
+        if (c != 0) return c;
+        return reviewOf(a).compareTo(reviewOf(b));
+      });
+    final dueNames = due.take(3).map((r) => r['name']).toSet();
+
+    //行格式：状态 + 短名 + 错因（有则带）+ ★待复习（到期 top3）；
+    //不载入日期——日期只留在 PROGRESS.jsonl 供 app 计算，避免导师念日期出戏
     final lines = <String>[];
     for (final row in rows) {
       final records = row['records'] as List? ?? const [];
@@ -197,13 +231,22 @@ class PromptBuilder {
           : null;
       if (latest == null) continue;
       final status = latest['status'] ?? '?';
-      final date = latest['date'] ?? '';
       final mistakeText = latest['mistake'] as String?;
-      lines.add(
-        '$status ${row['name']}（最近 $date${mistakeText != null && mistakeText.isNotEmpty ? '，错因：$mistakeText' : ''}）',
+      final mistake = mistakeText != null && mistakeText.isNotEmpty
+          ? '（错因：$mistakeText）'
+          : '';
+      final star = dueNames.contains(row['name']) ? '★待复习' : '';
+      lines.add('$status ${row['name']}$mistake$star');
+    }
+    final block = ['【知识点进度】', ...lines];
+    //内联规则随 ★ 出现（无到期 = 零增量）：带出纪律固化在注入端，不依赖模型自觉
+    if (dueNames.isNotEmpty) {
+      block.add(
+        '★待复习的知识点复习已到期。可适时自然带出：一次至多一个，以提问引导回忆'
+        '而非直接告知答案，禁止“该复习了”式机械提醒，不挤占新内容教学。',
       );
     }
-    return ['【知识点进度】', ...lines].join('\n');
+    return block.join('\n');
   }
 
   //课后更新用：现有知识点短名清单（供 LLM 沿用短名，不重命名）

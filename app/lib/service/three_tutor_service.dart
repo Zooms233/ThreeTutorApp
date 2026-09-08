@@ -408,9 +408,24 @@ class ThreeTutorService {
     return jsonDecode(t.substring(start, end + 1)) as Map<String, dynamic>;
   }
 
-  //review 偏移（写档用）：✓+7d / △+3d / ✗+1d，其他默认 +7
-  String _offsetReview(String date, String status) {
-    final days = status == '△' ? 3 : (status == '✗' ? 1 : 7);
+  //review 偏移（写档用，SRS 思路）：首次登记/刚答错后 ✓+7、△+3、✗+1；
+  //此后连续 ✓ 使间隔递增 14→30→60（封顶）——越熟练越少打扰，停学期积压自动缩水；
+  //间隔从 records 序列推导，PROGRESS schema 零变更
+  String _offsetReview(String date, String status, List<dynamic> history) {
+    int days;
+    if (status == '△') {
+      days = 3;
+    } else if (status == '✗') {
+      days = 1;
+    } else {
+      //从尾部数连续 ✓ 次数（不含本次），查表取间隔
+      var streak = 0;
+      for (final rec in history.reversed) {
+        if ((rec as Map<String, dynamic>)['status'] != '✓') break;
+        streak++;
+      }
+      days = switch (streak) { 0 => 7, 1 => 14, 2 => 30, _ => 60 };
+    }
     final d = DateTime.parse(date).add(Duration(days: days));
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
@@ -854,16 +869,19 @@ class ThreeTutorService {
       final name = item['name'] as String? ?? '';
       if (name.isEmpty) continue;
       final status = item['status'] as String? ?? '✓';
+      final idx = rows.indexWhere((r) => r['name'] == name);
+      final history = idx >= 0
+          ? rows[idx]['records'] as List? ?? const []
+          : const [];
       final block = <String, dynamic>{
         'status': status,
         'date': today,
-        'review': _offsetReview(today, status),
+        'review': _offsetReview(today, status, history),
       };
       final mistake = item['mistake'] as String?;
       if (status != '✓' && mistake != null && mistake.isNotEmpty) {
         block['mistake'] = mistake;
       }
-      final idx = rows.indexWhere((r) => r['name'] == name);
       if (idx >= 0) {
         final row = rows[idx];
         row['records'] = [...(row['records'] as List? ?? const []), block];
