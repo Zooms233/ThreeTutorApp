@@ -1,15 +1,21 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show ImageByteFormat;
 
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:three_tutor/main.dart';
 import 'package:three_tutor/page/chat/course_detail_page.dart';
 import 'package:three_tutor/service/llm_client.dart' show LlmException;
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/widget/chat_card.dart' show ChatCardView, normalizeItalic;
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
@@ -23,22 +29,6 @@ class GroupChatPage extends StatefulWidget {
 
   @override
   State<GroupChatPage> createState() => _GroupChatPageState();
-}
-
-//下划线斜体规范化：_文字_ → *文字*（gpt_markdown 的 ItalicMd 只认星号斜体，不认下划线）
-//开/闭下划线不贴 ASCII 字母数字（保护 file_name 类英文词内下划线与数字下标），内容首尾非空白
-final RegExp _underscoreItalic = RegExp(
-  r'(?<![A-Za-z0-9])_(?!_)([^_\s](?:[^_\n]*[^_\s])?)_(?![A-Za-z0-9_])',
-);
-
-//渲染前调用：把非 LaTeX 区间的 _文字_ 转为 *文字*；公式段原样保留（_ 是 LaTeX 下标语法）
-String _normalizeItalic(String text) {
-  return text.splitMapJoin(
-    RegExp(r'\$\$?[^$]*\$\$?'),
-    onMatch: (m) => m.group(0)!,
-    onNonMatch: (t) =>
-        t.replaceAllMapped(_underscoreItalic, (m) => '*${m[1]}*'),
-  );
 }
 
 //消息流渲染单元：系统分隔行或消息行
@@ -79,6 +69,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
   final _service = ThreeTutorService(); //编排层：三态判定 + 各场景收发与上下课
+  final _cardKey = GlobalKey(); //离屏聊天卡片截图锚点
+  Widget? _shareCard; //待截图的卡片（非空时挂屏外渲染，截完即卸）
+  bool _sharing = false; //导出进行中（按钮转圈防重复点击）
 
   //群聊逐条上屏队列：onMessage 只入队，消费循环按固定间隔逐条显示（模拟微信聊天节奏）。
   //落档仍由 service 实时完成——队列仅控制 UI 呈现；退出重进走 _reload 全量显示（历史消息本就一次呈现）
@@ -461,6 +454,114 @@ class _GroupChatPageState extends State<GroupChatPage> {
     );
   }
 
+  //导出聊天卡片：定位最新已完成课次 → 离屏渲染长图 → 截图 → 系统分享（推广入口）
+  Future<void> _exportLessonCard() async {
+    if (_sharing) return;
+    setState(() => _sharing = true);
+    try {
+      //最新 ended 课次：从最新文件往前找首个 meta.status=ended（最新 idle 文件是
+      //新开课区间的 qa 交流段，不算一节课）；上课中按钮隐藏，此处在 idle 时进入
+      final files = await StorageService().listChatFiles(widget.courseName);
+      String? target;
+      Map<String, dynamic> meta = {};
+      for (var i = files.length - 1; i >= 0; i--) {
+        final first = File(files[i]).readAsLinesSync().first;
+        final m = jsonDecode(first) as Map<String, dynamic>;
+        if (m['status'] == 'ended') {
+          target = files[i];
+          meta = m;
+          break;
+        }
+      }
+      if (target == null) {
+        _toast('没有已完成的课次可分享');
+        return;
+      }
+      //卡片只渲染消息与翻书提示行（meta / tool_call 中间轮不渲染）
+      final entries = (await StorageService().loadChatFile(target))
+          .where((e) => e['type'] == 'message' || e['type'] == 'tool')
+          .toList();
+      if (entries.isEmpty) {
+        _toast('本课没有可分享的消息');
+        return;
+      }
+      final date = meta['date'] as String? ?? '';
+      //挂载离屏卡片（屏外 OverflowBox：高度不设限，长图按内容完整布局）
+      //→ 等渲染与头像图解码 → 截图
+      setState(() {
+        _shareCard = ChatCardView(
+          courseName: widget.courseName,
+          lesson: meta['lesson'] as int? ?? 0,
+          tutor: meta['tutor'] as String? ?? '',
+          date: date.length >= 10 ? date.substring(5) : date,
+          entries: entries,
+          courseDirPath: _courseDirPath,
+          tutorFiles: _tutorFiles,
+          learnerName: _learnerName,
+        );
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      final boundary = _cardKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
+        _toast('卡片渲染失败，请重试');
+        return;
+      }
+      final image = await boundary.toImage(pixelRatio: 3);
+      final byteData = await image.toByteData(format: ImageByteFormat.png);
+      image.dispose();
+      if (byteData == null) {
+        _toast('截图失败，请重试');
+        return;
+      }
+      final dir = await getTemporaryDirectory();
+      final lesson = meta['lesson'] as int? ?? 0;
+      final tmpFile = File('${dir.path}/chat_card_$lesson.png');
+      final bytes = byteData.buffer.asUint8List();
+      await tmpFile.writeAsBytes(bytes);
+      if (!mounted) return;
+      //保存：桌面端弹保存对话框选位置（file_selector）；平台不支持或用户取消时
+      //回退临时目录文件，用系统查看器打开预览——转发/发送交给系统应用，
+      //（share_plus 在 Windows 端 MissingPluginException，弃用；仅生成图片更简单可靠）
+      var savedPath = tmpFile.path;
+      try {
+        final location = await getSaveLocation(
+          suggestedName: '第$lesson课_${widget.courseName}_聊天卡片.png',
+          acceptedTypeGroups: const [
+            XTypeGroup(label: 'PNG 图片', extensions: <String>['png']),
+          ],
+        );
+        if (location != null) {
+          savedPath = location.path;
+          await File(savedPath).writeAsBytes(bytes);
+        }
+      } on Exception {
+        //平台不支持保存对话框（如 iOS）：沿用临时目录方案
+      }
+      if (!mounted) return;
+      final result = await OpenFilex.open(savedPath);
+      if (!mounted) return;
+      if (savedPath != tmpFile.path) {
+        _toast('已保存：$savedPath');
+      } else if (result.type == ResultType.done) {
+        _toast('卡片已生成，转发请用系统查看器的分享/保存功能');
+      } else {
+        _toast('卡片已生成：$savedPath');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _toast('分享失败：$e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _shareCard = null;
+          _sharing = false;
+        });
+      }
+    }
+  }
+
   //当前时刻（用户消息 time 字段，乐观上屏用；落档以服务层写入为准）
   String _now() {
     final n = DateTime.now();
@@ -604,6 +705,23 @@ class _GroupChatPageState extends State<GroupChatPage> {
         appBar: AppBar(
           title: Text(widget.courseName),
           actions: [
+            //分享本课聊天卡片：完成一节课后显示（idle + lessons ≥ 1），上课中/从未上课隐藏；
+            //位于课后交流切换按钮左侧（导出图片 → 系统分享，推广入口）
+            if (_latestStatus == 'idle' && _lessons >= 1)
+              _sharing
+                  ? const Padding(
+                      padding: EdgeInsets.fromLTRB(14, 12, 14, 12),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.share, size: 22),
+                      tooltip: '分享本课聊天卡片',
+                      onPressed: _exportLessonCard,
+                    ),
             //课后交流切换：仅 idle 且上过课（lessons ≥ 1）显示；默认问答，激活为群聊讨论
             if (_latestStatus == 'idle' && _lessons >= 1)
               IconButton(
@@ -640,16 +758,38 @@ class _GroupChatPageState extends State<GroupChatPage> {
             ),
           ],
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : SafeArea(
-                child: Column(
-                  children: [
-                    Expanded(child: _buildMessageList()),
-                    _buildInputBar(), //只读阶段的完整形态预览：禁用
-                  ],
+        body: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            _loading
+                ? const Center(child: CircularProgressIndicator())
+                : SafeArea(
+                    child: Column(
+                      children: [
+                        Expanded(child: _buildMessageList()),
+                        _buildInputBar(), //只读阶段的完整形态预览：禁用
+                      ],
+                    ),
+                  ),
+            //离屏聊天卡片：屏外布局（OverflowBox 高度不设限，长图按内容完整渲染不被
+            //视口裁剪），仅导出时挂载，截图完成即卸载（Clip.none 保险：不裁溢出部分）
+            if (_shareCard != null)
+              Positioned(
+                left: -10000,
+                top: 0,
+                child: SizedBox(
+                  width: ChatCardView.width,
+                  height: 0,
+                  child: OverflowBox(
+                    maxWidth: ChatCardView.width,
+                    maxHeight: double.infinity,
+                    alignment: Alignment.topLeft,
+                    child: RepaintBoundary(key: _cardKey, child: _shareCard),
+                  ),
                 ),
               ),
+          ],
+        ),
       ),
     );
   }
@@ -803,7 +943,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   ),
                 ),
                 child: GptMarkdown(
-                  _normalizeItalic(content),
+                  normalizeItalic(content),
                   style: const TextStyle(fontSize: 15, height: 1.4),
                   useDollarSignsForLatex:
                       true, //$...$ 与 $$...$$ 定界的 LaTeX 需显式开启（默认只认 \(...\)/\[...\]）
@@ -846,7 +986,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 ),
               ),
               child: GptMarkdown(
-                _normalizeItalic(content),
+                normalizeItalic(content),
                 style: const TextStyle(fontSize: 15, height: 1.4),
                 useDollarSignsForLatex: true,
                 styleSheet: const GptMarkdownStyleSheet(
