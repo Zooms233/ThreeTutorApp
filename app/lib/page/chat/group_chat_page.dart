@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 
 import 'package:flutter/material.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:tutor_chat/main.dart';
 import 'package:tutor_chat/page/chat/course_detail_page.dart';
 import 'package:tutor_chat/service/llm_client.dart' show LlmException;
@@ -40,11 +43,17 @@ String _normalizeItalic(String text) {
 
 //消息流渲染单元：系统分隔行或消息行
 class _ChatItem {
-  const _ChatItem.divider(this.text) : message = null;
-  const _ChatItem.message(this.message) : text = null;
+  const _ChatItem.divider(this.text, {this.linkText, this.linkPath})
+    : message = null;
+  const _ChatItem.message(this.message)
+    : text = null,
+      linkText = null,
+      linkPath = null;
 
   final String? text; //分隔行文本
   final Map<String, dynamic>? message; //消息行数据
+  final String? linkText; //分隔行中可点部分的文本（翻书行链接，其余部分灰色）
+  final String? linkPath; //链接目标：材料文件绝对路径（外部应用打开）
 }
 
 class _GroupChatPageState extends State<GroupChatPage> {
@@ -489,17 +498,29 @@ class _GroupChatPageState extends State<GroupChatPage> {
         //agent 翻书中间轮：不渲染（可见提示由随后的 tool 行承载）
       } else if (entry['type'] == 'tool') {
         //翻书记录：轻量系统提示（成功指针行与失败快照行都渲染；兼容旧 file/section 行）
+        //成功行整段可点 → 调系统「打开方式」用外部应用打开材料文件（本应用不预览）
         final name = entry['name'] as String? ?? '';
         final path = entry['path'] as String?;
         final offset = entry['offset'] as int?;
         final file = entry['file'] as String?;
         final section = entry['section'] as String?;
-        final label = path != null
-            ? '查阅材料：$path${offset != null ? ' 第$offset行起' : ''}'
-            : (file != null && section != null
-                  ? '翻阅教材：$file > $section'
-                  : '查阅材料（内容暂不可用）');
-        items.add(_ChatItem.divider('📖 $name $label'));
+        if (path != null) {
+          final label = '查阅材料：$path${offset != null ? ' 第$offset行起' : ''}';
+          items.add(_ChatItem.divider(
+            '📖 $name $label',
+            linkText: label,
+            linkPath: '$_courseDirPath/$path', //新格式 path 为课程目录下相对路径
+          ));
+        } else if (file != null && section != null) {
+          final label = '翻阅教材：$file > $section';
+          items.add(_ChatItem.divider(
+            '📖 $name $label',
+            linkText: label,
+            linkPath: '$_courseDirPath/TEXTBOOK/$file', //旧格式 file 为 TEXTBOOK/ 下文件名
+          ));
+        } else {
+          items.add(_ChatItem.divider('📖 $name 查阅材料（内容暂不可用）'));
+        }
       } else {
         final phase = entry['phase'] as String? ?? 'teaching';
         if (phase == 'social' && !seenSocial) {
@@ -586,7 +607,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
         itemBuilder: (context, index) {
           final item = _items[index];
           return item.text != null
-              ? _buildDivider(item.text!)
+              ? _buildDivider(item)
               : _buildMessage(item.message!);
         },
       ),
@@ -594,23 +615,82 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   //系统分隔行：两侧细线 + 居中小字（课次分隔 / 下课后 / 加入群聊 / 没有更多了）
-  Widget _buildDivider(String text) {
+  //带 linkPath 的行（翻书行）：linkText 部分染链接蓝可点，点击用外部应用打开材料文件
+  Widget _buildDivider(_ChatItem item) {
+    const grey = TextStyle(fontSize: 12, color: Color(0xFFB0B0B0));
+    final link = item.linkPath;
+    final Widget center;
+    if (link != null && item.linkText != null) {
+      final head = item.text!.substring(
+        0,
+        item.text!.length - item.linkText!.length,
+      );
+      center = GestureDetector(
+        onTap: () => _openMaterial(link),
+        child: Text.rich(
+          TextSpan(
+            style: grey,
+            children: [
+              TextSpan(text: head),
+              TextSpan(
+                text: item.linkText!,
+                style: const TextStyle(color: Color(0xFF576B95)), //微信链接蓝
+              ),
+            ],
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis, //长路径不撑破行
+        ),
+      );
+    } else {
+      center = Text(
+        item.text!,
+        style: grey,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
+    }
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 24),
-      child: Row(
-        children: [
-          const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+      child: LayoutBuilder(
+        builder: (context, constraints) => Row(
+          children: [
+            const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+            //中间按内容宽（短文本时两侧平分 → 居中）；长文本限宽截断不撑破
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: center,
+              ),
             ),
-          ),
-          const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
-        ],
+            const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+          ],
+        ),
       ),
     );
+  }
+
+  //翻书行点击：把材料文件交给系统「打开方式」（外部应用打开，本应用不预览）
+  Future<void> _openMaterial(String path) async {
+    if (!File(path).existsSync()) {
+      _toast('文件已移除');
+      return;
+    }
+    try {
+      final result = await OpenFilex.open(path);
+      if (!mounted) return;
+      if (result.type != ResultType.done) {
+        _toast(
+          result.type == ResultType.noAppToOpen
+              ? '未找到可打开该文件的应用'
+              : '打开失败，请检查该文件类型的默认应用',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      _toast('打开失败：$e');
+    }
   }
 
   //消息行：导师消息左对齐（头像+名字+白气泡），用户消息右对齐（绿气泡+头像）
