@@ -31,6 +31,58 @@ class _UsagePageState extends State<UsagePage> {
     });
   }
 
+  //清理已删除课程的用量残留：先扫描预览（无残留则提示），列出课程红字确认后删除并刷新
+  Future<void> _purgeOrphans() async {
+    final scan = await StorageService().orphanUsageScan();
+    if (!mounted) return;
+    if (scan.courses.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('没有已删除课程的残留记录'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    final names = scan.courses.toList()..sort();
+    final preview = names.length <= 5
+        ? names.join('、')
+        : '${names.take(5).join('、')} 等 ${names.length} 门';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('清理用量残留'),
+        content: Text(
+          '检测到 ${names.length} 门已删除课程的用量记录（共 ${scan.rows} 条）：\n'
+          '$preview\n\n删除后不可恢复，确定清理吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFE64340), //红色警示：不可逆操作
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清理'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final removed = await StorageService().purgeOrphanUsage();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已清理 ${names.length} 门课程的 $removed 条记录'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    _load();
+  }
+
   //账本数值字段便捷读取（缺失/脏数据按 0 计）
   int _num(Map<String, dynamic> r, String k) => (r[k] as num?)?.toInt() ?? 0;
 
@@ -83,7 +135,16 @@ class _UsagePageState extends State<UsagePage> {
       );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('用量统计')),
+      appBar: AppBar(
+        title: const Text('用量统计'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '清理已删除课程的残留记录',
+            onPressed: _purgeOrphans,
+          ),
+        ],
+      ),
       body: ListView(
         children: [
           _buildHeatmap(_rows),

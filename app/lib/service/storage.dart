@@ -591,6 +591,45 @@ class StorageService {
     }
   }
 
+  // —— 孤儿用量清理：deleteCourse 只删课程目录，全局账本 USAGE.jsonl 的行会残留 ——
+
+  //扫描孤儿用量：course 对应课程目录已不存在的记录 → (孤儿课程名集合, 记录条数)
+  //course 为空的行保留（无法判定归属，页面归入「未知课程」）
+  Future<({Set<String> courses, int rows})> orphanUsageScan() async {
+    final rows = await readUsageLog();
+    final alive = (await listCourses()).toSet();
+    final courses = <String>{};
+    var n = 0;
+    for (final r in rows) {
+      final c = r['course'] as String? ?? '';
+      if (c.isNotEmpty && !alive.contains(c)) {
+        courses.add(c);
+        n++;
+      }
+    }
+    return (courses: courses, rows: n);
+  }
+
+  //执行清理：重写 USAGE.jsonl 剔除孤儿行，返回删除的条数（无孤儿返回 0 不写盘）
+  Future<int> purgeOrphanUsage() async {
+    final rows = await readUsageLog();
+    final alive = (await listCourses()).toSet();
+    final kept = rows
+        .where((r) {
+          final c = r['course'] as String? ?? '';
+          return c.isEmpty || alive.contains(c);
+        })
+        .toList();
+    final removed = rows.length - kept.length;
+    if (removed == 0) return 0;
+    final root = await getRootDir();
+    final file = File('${root.path}/USAGE.jsonl');
+    await file.writeAsString(
+      kept.isEmpty ? '' : '${kept.map(jsonEncode).join('\n')}\n',
+    );
+    return removed;
+  }
+
   //列出课程教学材料：{outline: [文件名], textbook: [文件名]}（各按文件名排序）
   Future<Map<String, List<String>>> listCourseMaterials(
     String courseName,
