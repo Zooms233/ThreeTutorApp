@@ -140,7 +140,8 @@ class StorageService {
     required String learnerName,
     required String motivation,
     String extra = '',
-    String? textbookPath,
+    List<String>? textbookPaths, //教学材料（可选，可多份，参考数据库，TEXTBOOK/）
+    String? syllabusPath, //教学大纲（可选，教学范围，OUTLINE/）
   }) async {
     final courseDir = await getCourseDir(courseName);
     if (courseDir.existsSync()) return '同名课程已存在';
@@ -184,12 +185,13 @@ class StorageService {
         }),
       );
 
-      //教材（可选）：复制进课程 TEXTBOOK/ 目录
-      if (textbookPath != null) {
-        final textbookDir = Directory('${courseDir.path}/TEXTBOOK');
-        await textbookDir.create();
-        final name = textbookPath.split(Platform.pathSeparator).last;
-        await File(textbookPath).copy('${textbookDir.path}/$name');
+      //教学材料（可选，可多份）：复制进课程 TEXTBOOK/ 目录（参考数据库，格式不限）
+      for (final p in textbookPaths ?? const <String>[]) {
+        await _copyIntoCourse(courseDir, 'TEXTBOOK', p);
+      }
+      //教学大纲（可选）：复制进课程 OUTLINE/ 目录（教学范围，短，全文注入）
+      if (syllabusPath != null) {
+        await _copyIntoCourse(courseDir, 'OUTLINE', syllabusPath);
       }
       return null;
     } catch (e) {
@@ -203,6 +205,18 @@ class StorageService {
       }
       return '创建失败：$e';
     }
+  }
+
+  //建课时把外部文件复制进课程子目录（TEXTBOOK/OUTLINE，自动建目录）
+  Future<void> _copyIntoCourse(
+    Directory courseDir,
+    String subDir,
+    String sourcePath,
+  ) async {
+    final dir = Directory('${courseDir.path}/$subDir');
+    await dir.create();
+    final name = sourcePath.split(Platform.pathSeparator).last;
+    await File(sourcePath).copy('${dir.path}/$name');
   }
 
   //会话列表数据：每课程一行（群名/日期/预览）
@@ -548,6 +562,66 @@ class StorageService {
     if (courseDir.existsSync()) {
       await courseDir.delete(recursive: true);
     }
+  }
+
+  //列出课程教学材料：{outline: [文件名], textbook: [文件名]}（各按文件名排序）
+  Future<Map<String, List<String>>> listCourseMaterials(
+    String courseName,
+  ) async {
+    final courseDir = await getCourseDir(courseName);
+    return {
+      'outline': await _listSubFiles(courseDir, 'OUTLINE'),
+      'textbook': await _listSubFiles(courseDir, 'TEXTBOOK'),
+    };
+  }
+
+  Future<List<String>> _listSubFiles(Directory courseDir, String sub) async {
+    final dir = Directory('${courseDir.path}/$sub');
+    if (!dir.existsSync()) return [];
+    final names = <String>[];
+    for (final e in dir.listSync()) {
+      if (e is File) {
+        names.add(e.path.split(Platform.pathSeparator).last);
+      }
+    }
+    names.sort();
+    return names;
+  }
+
+  //添加教学材料/大纲：复制进课程子目录；大纲仅一份（先清旧文件再复制，即「更换」）
+  //返回 null=成功；返回字符串=失败原因
+  Future<String?> addCourseMaterial(
+    String courseName,
+    String sub, //'OUTLINE' | 'TEXTBOOK'
+    String sourcePath,
+  ) async {
+    try {
+      final courseDir = await getCourseDir(courseName);
+      final dir = Directory('${courseDir.path}/$sub');
+      await dir.create(recursive: true);
+      final name = sourcePath.split(Platform.pathSeparator).last;
+      if (sub == 'OUTLINE') {
+        //仅一份：清掉旧大纲（更换语义）
+        for (final e in dir.listSync()) {
+          if (e is File) await e.delete();
+        }
+      }
+      await File(sourcePath).copy('${dir.path}/$name');
+      return null;
+    } catch (e) {
+      return '导入失败：$e';
+    }
+  }
+
+  //删除课程内教学材料/大纲文件
+  Future<void> deleteCourseMaterial(
+    String courseName,
+    String sub,
+    String fileName,
+  ) async {
+    final courseDir = await getCourseDir(courseName);
+    final file = File('${courseDir.path}/$sub/$fileName');
+    if (file.existsSync()) await file.delete();
   }
 
   //读取 CONFIG.json（不存在返回空 Map）

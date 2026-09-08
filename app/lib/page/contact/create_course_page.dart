@@ -23,14 +23,15 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
   final _learnerName = TextEditingController();
   final _motivation = TextEditingController();
   final _extra = TextEditingController();
-  String? _textbookPath; //选中的教材文件路径（可选）
+  String? _syllabusPath; //选中的教学大纲文件路径（可选，教学范围，仅一份）
+  final List<String> _textbookPaths = []; //选中的教学材料文件路径（可选，可多份）
   bool _submitting = false; //提交中：防重复建课
 
   //课程名 = 课程目录名，禁止文件系统非法字符
   static final _invalidChars = RegExp(r'[\\/:*?"<>|]');
 
-  //选择教材文件：Windows 弹资源管理器，Android 走系统选择器（SAF）
-  Future<void> _pickTextbook() async {
+  //选择单个文件（大纲）：Windows 弹资源管理器，Android 走系统选择器（SAF）
+  Future<void> _pickSyllabus() async {
     final XFile? file;
     try {
       file = await openFile();
@@ -47,7 +48,31 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     }
     if (file == null) return; //用户取消选择
     final path = file.path; //先取出路径（闭包内无法使用可空变量的类型提升）
-    setState(() => _textbookPath = path);
+    setState(() => _syllabusPath = path);
+  }
+
+  //选择多个文件（教学材料，可多份）
+  Future<void> _pickTextbooks() async {
+    final List<XFile> files;
+    try {
+      files = await openFiles();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('文件选择器不可用：$e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    if (files.isEmpty) return; //用户取消选择
+    setState(() {
+      for (final f in files) {
+        final path = f.path;
+        if (!_textbookPaths.contains(path)) _textbookPaths.add(path);
+      }
+    });
   }
 
   //提交建课；成功后清栈直达新建课程的群聊页（返回时不倒回表单/资料页）
@@ -62,7 +87,8 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
       learnerName: _learnerName.text.trim(),
       motivation: _motivation.text.trim(),
       extra: _extra.text.trim(),
-      textbookPath: _textbookPath,
+      textbookPaths: _textbookPaths,
+      syllabusPath: _syllabusPath,
     );
 
     if (!mounted) return;
@@ -121,7 +147,8 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
               validator: _validateRequired,
             ),
             _buildField('其他想向导师传达的内容', _extra, hint: '可选', maxLines: 3),
-            _buildTextbookRow(),
+            _buildSyllabusRow(),
+            _buildTextbooksRow(),
             const SizedBox(height: 24),
             FilledButton(
               onPressed: _submitting ? null : _submit,
@@ -168,8 +195,8 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     );
   }
 
-  //教材行：标签 + 已选文件名（点按清除）或「选择文件」按钮
-  Widget _buildTextbookRow() {
+  //教学大纲行（仅一份）：标签 + 已选文件名（点按清除）或「选择文件」按钮
+  Widget _buildSyllabusRow() {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -177,23 +204,78 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
       child: Row(
         children: [
           const Text(
-            '教材文件（可选）',
+            '教学大纲（可选）',
             style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
           ),
           const Spacer(),
-          if (_textbookPath != null)
+          if (_syllabusPath != null)
             GestureDetector(
-              onTap: () => setState(() => _textbookPath = null),
+              onTap: () => setState(() => _syllabusPath = null),
               child: Text(
-                _fileNameOf(_textbookPath!),
+                _fileNameOf(_syllabusPath!),
                 style: const TextStyle(fontSize: 14, color: Color(0xFF07C160)),
                 overflow: TextOverflow.ellipsis,
               ),
             )
           else
             TextButton(
-              onPressed: _pickTextbook,
+              onPressed: _pickSyllabus,
               child: const Text('选择文件', style: TextStyle(fontSize: 14)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  //教学材料行（可多份）：标签 + 已选文件列表（点按移除）或「选择文件」按钮
+  Widget _buildTextbooksRow() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '教学材料（可选，可多份）',
+                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: _pickTextbooks,
+                child: const Text('选择文件', style: TextStyle(fontSize: 14)),
+              ),
+            ],
+          ),
+          for (final path in _textbookPaths)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _fileNameOf(path),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF07C160),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  //移除该份教材
+                  GestureDetector(
+                    onTap: () =>
+                        setState(() => _textbookPaths.remove(path)),
+                    child: const Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: Color(0xFF999999),
+                    ),
+                  ),
+                ],
+              ),
             ),
         ],
       ),

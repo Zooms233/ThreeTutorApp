@@ -488,13 +488,17 @@ class _GroupChatPageState extends State<GroupChatPage> {
       } else if (entry['type'] == 'tool_call') {
         //agent 翻书中间轮：不渲染（可见提示由随后的 tool 行承载）
       } else if (entry['type'] == 'tool') {
-        //翻书记录：轻量系统提示（成功指针行与失败快照行都渲染）
+        //翻书记录：轻量系统提示（成功指针行与失败快照行都渲染；兼容旧 file/section 行）
         final name = entry['name'] as String? ?? '';
+        final path = entry['path'] as String?;
+        final offset = entry['offset'] as int?;
         final file = entry['file'] as String?;
         final section = entry['section'] as String?;
-        final label = file != null && section != null
-            ? '翻阅教材：$file > $section'
-            : '翻阅教材（内容暂不可用）';
+        final label = path != null
+            ? '查阅材料：$path${offset != null ? ' 第$offset行起' : ''}'
+            : (file != null && section != null
+                  ? '翻阅教材：$file > $section'
+                  : '查阅材料（内容暂不可用）');
         items.add(_ChatItem.divider('📖 $name $label'));
       } else {
         final phase = entry['phase'] as String? ?? 'teaching';

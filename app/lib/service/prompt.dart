@@ -25,6 +25,7 @@ class PromptMessage {
 }
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
+const _syllabusLimit = 4000; //教学大纲截断上限（大纲通常短，全文注入）
 
 //教材按需载入的公共工具：切节/物化/@read 解析。
 //物化与翻书回填共用同一模板与同一读盘路径——两处字节级一致是前缀命中的关键（doc/04）。
@@ -211,94 +212,227 @@ class PromptBuilder {
     return '【现有知识点】\n${names.isEmpty ? '（暂无）' : names.join('、')}';
   }
 
-  // —— 教材当前节（④）——
+  // —— 教学范围与材料（④）——
+  //OUTLINE/=教学范围（大纲，短，全文注入）；TEXTBOOK/=教学材料（参考数据库，长，read 按需查阅）。
 
-  //教材目录：全部节标题清单（@read 的寻址簿；qa 场景仅注入目录，翻书时按指针物化）
-  Future<String?> _textbookToc(String courseDir) async {
-    final dir = Directory('$courseDir/TEXTBOOK');
+  //文本文件判定（目录/read 只认可读文本；docx/pdf 等二进制不纳入，避免乱码注入）
+  static bool _isTextFile(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.md') ||
+        lower.endsWith('.markdown') ||
+        lower.endsWith('.txt') ||
+        lower.endsWith('.text') ||
+        lower.endsWith('.log');
+  }
+
+  //教学范围：OUTLINE/ 下文件全文注入（标注【教学范围】；大纲通常短，模型以此定教学主线）
+  Future<String?> _syllabusBlock(String courseDir) async {
+    final dir = Directory('$courseDir/OUTLINE');
     if (!dir.existsSync()) return null;
     final files =
         dir
             .listSync()
             .whereType<File>()
-            .where((e) => e.path.endsWith('.md'))
+            .where((e) => _isTextFile(e.path))
             .toList()
           ..sort((a, b) => a.path.compareTo(b.path));
     if (files.isEmpty) return null;
-    final lines = <String>[];
+    final parts = <String>[];
     for (final f in files) {
-      final name = f.uri.pathSegments.last;
-      for (final line in await f.readAsLines()) {
-        if (!line.trim().startsWith('#')) continue;
-        final (_, title) = _headingInfoOf(line);
-        if (title.isEmpty) continue;
-        lines.add('- $name > $title');
+      var text = await f.readAsString();
+      if (text.length > _syllabusLimit) {
+        text = '${text.substring(0, _syllabusLimit)}\n……大纲内容过长，已截断';
       }
+      parts.add('【教学范围 · ${f.uri.pathSegments.last}】\n$text');
     }
-    if (lines.isEmpty) return null;
-    return ['【教材目录】', ...lines].join('\n');
+    return parts.join('\n\n');
   }
 
-  //今日教材：当前节全文（原样注入，超长截断兜底）+ 目录（@read 寻址簿）；仅目录模式传 withBody=false
+  //教学材料目录：OUTLINE/ + TEXTBOOK/ 全部文本文件的「标题 + 起始行号」清单
+  //（read 工具的行号寻址簿；无标题文件按 200 行一段列块）。
+  Future<String?> _materialToc(String courseDir) async {
+    final entries = <String>[];
+    for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
+      final dir = Directory('$courseDir/$sub');
+      if (!dir.existsSync()) continue;
+      final files =
+          dir
+              .listSync()
+              .whereType<File>()
+              .where((e) => _isTextFile(e.path))
+              .toList()
+            ..sort((a, b) => a.path.compareTo(b.path));
+      if (files.isEmpty) continue;
+      for (final f in files) {
+        final name = f.uri.pathSegments.last;
+        final rel = '$sub/$name';
+        final lines = await f.readAsLines();
+        entries.add('- $rel（共 ${lines.length} 行）');
+        //标题行 + 行号（限制条数防目录过大）
+        final headingLines = <String>[];
+        for (var i = 0; i < lines.length && headingLines.length < 200; i++) {
+          if (!lines[i].trim().startsWith('#')) continue;
+          final (_, title) = _headingInfoOf(lines[i]);
+          if (title.isEmpty) continue;
+          headingLines.add('  · $title …… 第 ${i + 1} 行');
+        }
+        if (headingLines.isEmpty) {
+          //无标题：按 200 行一段列块（read 用 offset 定位）
+          final blocks = (lines.length + 199) ~/ 200;
+          for (var b = 0; b < blocks && b < 50; b++) {
+            final start = b * 200 + 1;
+            final end = start + 199 > lines.length ? lines.length : start + 199;
+            entries.add('  · 第${b + 1}段（$start-$end 行）…… 第 $start 行');
+          }
+        } else {
+          entries.addAll(headingLines);
+        }
+      }
+    }
+    if (entries.isEmpty) return null;
+    return ['【教学材料目录】', ...entries].join('\n');
+  }
+
+  //position →（相对路径, 起始行, 结束行[含]）；找不到返回 null。
+  //支持旧格式「TEXTBOOK/xxx.md > 节标题」与纯标题（在全部材料里模糊匹配）。
+  Future<(String, int, int)?> _resolvePosition(
+    String courseDir,
+    String pos,
+  ) async {
+    final sep = pos.indexOf(' > ');
+    if (sep >= 0) {
+      final fileRel = pos.substring(0, sep).trim();
+      final section = pos.substring(sep + 3).trim();
+      if (fileRel.isEmpty || section.isEmpty) return null;
+      return _headingRange(courseDir, fileRel, section);
+    }
+    for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
+      final dir = Directory('$courseDir/$sub');
+      if (!dir.existsSync()) continue;
+      final files =
+          dir
+              .listSync()
+              .whereType<File>()
+              .where((e) => _isTextFile(e.path))
+              .toList()
+            ..sort((a, b) => a.path.compareTo(b.path));
+      for (final f in files) {
+        final rel = '$sub/${f.uri.pathSegments.last}';
+        final r = await _headingRange(courseDir, rel, pos);
+        if (r != null) return r;
+      }
+    }
+    return null;
+  }
+
+  //在某文件按标题（全等或包含）定位行范围：标题行 → 下一个同级/更高级标题前
+  Future<(String, int, int)?> _headingRange(
+    String courseDir,
+    String rel,
+    String title,
+  ) async {
+    final file = File('$courseDir/$rel');
+    if (!file.existsSync()) return null;
+    final lines = await file.readAsLines();
+    int? start;
+    var level = 0;
+    for (var i = 0; i < lines.length; i++) {
+      if (!lines[i].trim().startsWith('#')) continue;
+      final (hashes, t) = _headingInfoOf(lines[i]);
+      if (start == null) {
+        if (t == title || t.contains(title)) {
+          start = i;
+          level = hashes;
+        }
+      } else if (hashes <= level) {
+        return (rel, start + 1, i); //下一个同级/更高级标题 → 本节结束
+      }
+    }
+    if (start == null) return null;
+    return (rel, start + 1, lines.length);
+  }
+
+  //按行范围读正文（1 起始，含 end）
+  Future<String?> _readLines(
+    String courseDir,
+    String rel,
+    int startLine,
+    int endLine,
+  ) async {
+    final file = File('$courseDir/$rel');
+    if (!file.existsSync()) return null;
+    final lines = await file.readAsLines();
+    if (startLine < 1 || startLine > lines.length) return null;
+    final end = endLine > lines.length ? lines.length : endLine;
+    return lines.sublist(startLine - 1, end).join('\n');
+  }
+
+  //今日教学位置：position 对应内容全文（按行读，超长截断）+ 目录（read 寻址簿）。
+  //position 找不到时仍返回目录——目录是翻书寻址依据，必须可靠在场；仅目录模式传 withBody=false。
   Future<String?> _textbookBlock(
     String courseDir,
     Object? position, {
     bool withBody = true,
   }) async {
-    if (!withBody) return _textbookToc(courseDir);
+    if (!withBody) return _materialToc(courseDir);
     final pos = position as String? ?? '';
-    if (pos.isEmpty) return null;
-    final sep = pos.indexOf(' > ');
-    if (sep < 0) return null;
-    final fileRel = pos.substring(0, sep).replaceFirst('TEXTBOOK/', '');
-    final section = pos.substring(sep + 3).trim();
-    if (fileRel.isEmpty || section.isEmpty) return null;
-
-    final body = readTextbookSection(courseDir, fileRel, section);
-    if (body == null) return null;
+    final toc = await _materialToc(courseDir);
+    if (pos.isEmpty) return toc;
+    final hit = await _resolvePosition(courseDir, pos);
+    if (hit == null) return toc;
+    final body = await _readLines(courseDir, hit.$1, hit.$2, hit.$3);
+    if (body == null) return toc;
     var trimmed = body;
     if (trimmed.length > _textbookLimit) {
       trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
     }
-    final toc = await _textbookToc(courseDir);
     return ['今日教材进度：$pos\n$trimmed', ?toc].join('\n\n');
   }
 
-  // —— agent 翻书工具（read_textbook）——
-  //只读教材一节；与目录寻址一致（file=文件名、section=节标题）。
-  //static 常量保证各场景请求字节级一致（影响缓存前缀的稳定段）。
-  static const textbookToolDefs = [
+  // —— agent 翻书工具（通用 read，对齐 pi）——
+  //只按行读取（path + offset/limit），不做任何格式解析——兼容任意文本教材；
+  //行号寻址依据来自【教学材料目录】。static 常量保证各场景请求字节级一致。
+  static const readToolDefs = [
     {
       'type': 'function',
       'function': {
-        'name': 'read_textbook',
-        'description': '读取教材中指定一节的内容并追加到对话。教材文件名与节标题见【教材目录】（没有教材目录或找不到该节时不要调用）。只读取目录中列出的节。',
+        'name': 'read',
+        'description': '读取教学材料或教学大纲中指定文件的某段内容并追加到对话。文件清单与行号范围见【教学材料目录】（没有目录或找不到文件时不要调用）。只读取目录中列出的文件。',
         'parameters': {
           'type': 'object',
           'properties': {
-            'file': {'type': 'string', 'description': '教材文件名，如 第一章.md'},
-            'section': {'type': 'string', 'description': '节标题，如 3-2 化学平衡移动'},
+            'path': {'type': 'string', 'description': '目录中的文件路径，如 TEXTBOOK/细胞生物学学习指南.md 或 OUTLINE/教学大纲.md'},
+            'offset': {'type': 'integer', 'description': '起始行号（从 1 开始；省略则从文件开头）'},
+            'limit': {'type': 'integer', 'description': '读取行数（默认 200，最多 500）'},
           },
-          'required': ['file', 'section'],
+          'required': ['path'],
         },
       },
     },
   ];
 
-  //执行 read_textbook：读盘→截断→模板；返回 tool 消息内容（未找到返回 null，由调用方给错误提示）
-  static String? executeTextbookTool(
+  //执行 read 工具：按行读取 → 截断 → 模板；未找到/参数非法返回 null（由调用方给错误提示）
+  static String? executeReadTool(
     String courseDir,
-    String file,
-    String section,
+    String path,
+    int? offset,
+    int? limit,
   ) {
-    final body = readTextbookSection(courseDir, file, section);
-    if (body == null) return null;
-    var trimmed = body;
-    if (trimmed.length > _textbookLimit) {
-      trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
+    final file = File('$courseDir/$path');
+    if (!file.existsSync()) return null;
+    final lines = file.readAsLinesSync();
+    if (lines.isEmpty) return null;
+    final start = (offset ?? 1) - 1;
+    if (start < 0 || start >= lines.length) return null;
+    final n = limit ?? 200;
+    final end = start + n > lines.length ? lines.length : start + n;
+    var body = lines.sublist(start, end).join('\n');
+    if (body.length > _textbookLimit) {
+      body = '${body.substring(0, _textbookLimit)}\n……内容过长，已截断';
     }
-    return textbookMaterialization(file, section, trimmed);
+    return '【教材 · $path 第 ${start + 1}-$end 行】\n$body';
   }
+
 
 // —— CHAT 历史映射 ——
 
@@ -335,15 +469,29 @@ class PromptBuilder {
       }
       if (row['type'] == 'tool') {
         //tool 消息：优先用行内快照 content（执行失败场景），否则按指针物化读盘
-        //（成功场景只存指针不存正文——教材未改则物化结果与首轮一致，缓存延续）
+        //（成功场景只存指针不存正文——材料未改则物化结果与首轮一致，缓存延续）
+        //新格式指针 = path/offset/limit（通用 read）；旧格式 = file/section（read_textbook）
         final snap = row['content'] as String?;
-        final content = snap ??
-            PromptBuilder.executeTextbookTool(
-                  courseDir,
-                  row['file'] as String? ?? '',
-                  row['section'] as String? ?? '',
-                ) ??
-            '【教材】内容已不可用（文件可能被移除）';
+        String? content = snap;
+        if (content == null) {
+          final path = row['path'] as String?;
+          if (path != null) {
+            content = PromptBuilder.executeReadTool(
+              courseDir,
+              path,
+              row['offset'] as int?,
+              row['limit'] as int?,
+            );
+          } else {
+            //旧格式指针（read_textbook 遗留）：走标题切节物化（materializeTextbookSection 仍保留）
+            content = materializeTextbookSection(
+              courseDir,
+              row['file'] as String? ?? '',
+              row['section'] as String? ?? '',
+            );
+          }
+          content ??= '【教材】内容已不可用（文件可能被移除）';
+        }
         mapped.add(
           PromptMessage('tool', content, null, row['tool_call_id'] as String?),
         );
@@ -414,6 +562,7 @@ class PromptBuilder {
       _learnerBlock(learner),
       _stateBlock(state),
       _progressBlock(progress),
+      await _syllabusBlock(courseDir), //教学范围（大纲，可选）
       '今天是$date。',
       await _textbookBlock(courseDir, state['position']),
     ]);
@@ -424,8 +573,8 @@ class PromptBuilder {
     return _compose(system, history);
   }
 
-  ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教材目录（仅目录，
-  ///需要某节内容时 @read，成本从每轮 8k 降到几百）；不注入状态与日期。
+  ///问答（idle 期，含建课后首聊）：问答规则 + next_tutor 档案 + 学习者档案 + 教学范围（大纲，可选）
+  ///+ 材料目录（仅目录，需要内容时 read 按需载入，成本从每轮 8k 降到几百）；不注入状态与日期。
   ///写入目标为下一课文件（新开课区间的交流段），群聊总在上一课文件尾，历史天然不含群聊。
   Future<List<Map<String, dynamic>>> qa({
     required String courseDir,
@@ -445,7 +594,12 @@ class PromptBuilder {
       _identity(tutorName),
       _tutorBlock(tutor),
       _learnerBlock(learner),
-      await _textbookBlock(courseDir, state['position']),
+      await _syllabusBlock(courseDir), //教学范围（大纲，可选）
+      await _textbookBlock(
+        courseDir,
+        state['position'],
+        withBody: false, //问答仅注入目录（read 寻址簿），需要哪段 read 哪段
+      ),
     ]);
     return _compose(system, await _mapHistory(courseDir, chatPath));
   }

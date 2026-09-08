@@ -135,14 +135,16 @@ class TutorChatService {
             final fn =
                 (calls.first as Map<String, dynamic>)['function']
                     as Map<String, dynamic>?;
-            String? file, section;
+            String? toolPath;
+            int? offset, limit;
             try {
               final args = jsonDecode(fn?['arguments'] as String? ?? '{}')
                   as Map<String, dynamic>;
-              file = args['file'] as String?;
-              section = args['section'] as String?;
+              toolPath = args['path'] as String?;
+              offset = args['offset'] as int?;
+              limit = args['limit'] as int?;
             } catch (_) {}
-            buf.writeln('  [$i] assistant（翻书：$file > $section）');
+            buf.writeln('  [$i] assistant（翻书：$toolPath 第$offset行起${limit ?? ''}行）');
           } else {
             final head = (content as String? ?? '').replaceAll('\n', ' ').trim();
             buf.writeln(
@@ -150,7 +152,7 @@ class TutorChatService {
             );
           }
         case 'tool':
-          buf.writeln('  [$i] tool（教材，${(content as String).length}字）');
+          buf.writeln('  [$i] tool（材料，${(content as String).length}字）');
         default:
           buf.writeln('  [$i] $role');
       }
@@ -194,8 +196,9 @@ class TutorChatService {
     if (content.contains('【知识点进度】')) blocks.add('进度');
     if (content.contains('【现有知识点】')) blocks.add('知识点清单');
     if (content.contains('今天是')) blocks.add('日期');
+    if (content.contains('【教学范围')) blocks.add('教学范围');
     if (content.contains('今日教材进度')) blocks.add('教材当前节');
-    if (content.contains('【教材目录】')) blocks.add('目录');
+    if (content.contains('【教学材料目录】')) blocks.add('目录');
     return '$rule：${blocks.join('+')}（${content.length}字）';
   }
 
@@ -500,7 +503,7 @@ class TutorChatService {
         scene: scene,
         messages: current,
         stream: true,
-        tools: isLast ? null : PromptBuilder.textbookToolDefs,
+        tools: isLast ? null : PromptBuilder.readToolDefs,
         thinkingEffort: 'disabled', //带 tools 必须思考关闭（见上注释）
         label: label,
         traceTag: '$label#${round + 1}', //临时测试：轮次标识（验证上下文拼接）
@@ -525,25 +528,33 @@ class TutorChatService {
       for (final call in result.toolCalls) {
         final id = call['id'] as String? ?? '';
         final fn = call['function'] as Map<String, dynamic>?;
-        String? file, section, content;
+        String? toolPath; //read 工具的 path（目录中相对路径）
+        int? offset, limit;
+        String? content;
         try {
           final args =
               jsonDecode(fn?['arguments'] as String? ?? '{}')
                   as Map<String, dynamic>;
-          file = args['file'] as String?;
-          section = args['section'] as String?;
-          if (file == null || section == null) {
-            throw const FormatException('缺少 file 或 section');
+          toolPath = args['path'] as String?;
+          offset = args['offset'] as int?;
+          limit = args['limit'] as int?;
+          if (toolPath == null || toolPath.isEmpty) {
+            throw const FormatException('缺少 path');
           }
-          content = PromptBuilder.executeTextbookTool(courseDir, file, section);
+          content = PromptBuilder.executeReadTool(
+            courseDir,
+            toolPath,
+            offset,
+            limit,
+          );
         } catch (e) {
           content = null;
         }
         if (content == null) {
           //未找到/参数错：错误文本作为快照落档（重放直接用，不再物化）
-          final err = file == null || section == null
-              ? '【教材】read_textbook 参数解析失败，请核对 file 与 section。'
-              : '【教材】未找到「$file > $section」，请对照【教材目录】中的标题重新调用。';
+          final err = toolPath == null || toolPath.isEmpty
+              ? '【read】参数解析失败，请核对 path（目录中的文件路径）。'
+              : '【read】文件「$toolPath」不存在或行号超出范围，请对照【教学材料目录】重新调用。';
           await _storage.appendChatMessage(path, {
             'type': 'tool',
             'tool_call_id': id,
@@ -556,14 +567,15 @@ class TutorChatService {
             PromptMessage('tool', err, null, id).toMap(),
           ];
         } else {
-          //成功：只落指针（file/section），重放时物化读盘
+          //成功：只落指针（path/offset/limit），重放时物化读盘
           await _storage.appendChatMessage(path, {
             'type': 'tool',
             'tool_call_id': id,
             'name': tutor,
             'time': _now(),
-            'file': file,
-            'section': section,
+            'path': toolPath,
+            'offset': ?offset,
+            'limit': ?limit,
           });
           current = [
             ...current,
