@@ -80,6 +80,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
   final _inputController = TextEditingController(); //输入框
   final _service = ThreeTutorService(); //编排层：三态判定 + 各场景收发与上下课
 
+  //群聊逐条上屏队列：onMessage 只入队，消费循环按固定间隔逐条显示（模拟微信聊天节奏）。
+  //落档仍由 service 实时完成——队列仅控制 UI 呈现；退出重进走 _reload 全量显示（历史消息本就一次呈现）
+  final List<Map<String, dynamic>> _socialQueue = [];
+  bool _flushingQueue = false; //消费循环进行中（防重入 + busy 变更时 reload 避让判断）
+  static const _socialGap = Duration(seconds: 3); //逐条显示间隔
+
   bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
 
   @override
@@ -100,11 +106,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   //跨页面生成中状态同步：busy 变更即重绘（含退出重进后的恢复）。
   //busy → 空闲时从文件重载：生成可能发生在本页面之外（如后台群聊），落档内容需拉回屏上。
+  //本页群聊队列消费中则跳过：未显示消息正逐条上屏，reload 会把它们一次性提前揭示。
   void _onBusyChanged() {
     if (!mounted) return;
     final wasBusy = _busy;
     setState(() {}); //文案经 getter 即时读静态表
-    if (wasBusy && !_busy) _reload();
+    if (wasBusy && !_busy && !_flushingQueue) _reload();
   }
 
   //初始加载：转圈后走同一套加载逻辑
@@ -208,6 +215,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final text = _inputController.text.trim();
     if (text.isEmpty || _busy) return;
     _inputController.clear();
+    _flushSocialQueueNow(); //插话前把队列剩余群聊一次性上屏：聊天记录需完整呈现
 
     ThreeTutorService.setBusyForCourse(widget.courseName, '正在输入中…');
     try {
@@ -362,18 +370,21 @@ class _GroupChatPageState extends State<GroupChatPage> {
       try {
         await _service.endLesson(
           courseName: widget.courseName,
-          //逐条落档即回调：总结先上屏（teaching），群聊消息逐条弹出（social）
+          //逐条落档即回调：总结（teaching）立即上屏，群聊消息（social）入队逐条弹出
           onMessage: (message) {
             if (!mounted) return;
-            setState(() {
-              _entries = [..._entries, message];
-              _items = _buildItems(
-                _entries,
-                hasMore: _hasMore,
-              ).reversed.toList();
-              //群聊阶段文案由 service._setBusy 统一切换，busyVersion 监听器触发重绘
-            });
-            _scrollToBottom();
+            if (message['phase'] != 'social') {
+              setState(() {
+                _entries = [..._entries, message];
+                _items = _buildItems(
+                  _entries,
+                  hasMore: _hasMore,
+                ).reversed.toList();
+              });
+              _scrollToBottom();
+              return;
+            }
+            _enqueueSocial(message);
           },
         );
         //成功：下一课文件已建（含群聊消息），lessons ≥ 1，toggle 开始显示
@@ -391,9 +402,56 @@ class _GroupChatPageState extends State<GroupChatPage> {
       }
     }
     if (!mounted) return;
-    //busy 清除由 service 端 finally 统一负责，busyVersion 监听器触发重绘
+    //busy 清除由 service 端 finally 统一负责，busyVersion 监听器触发重绘；
+    //群聊队列消费完再重载：避免 reload 把尚未显示的消息一次性提前揭示
+    await _waitSocialFlushed();
     await _reload();
     _scrollToBottom();
+  }
+
+  //群聊消息入队并确保消费循环在跑（循环进行中则由其顺带消费，防重入）
+  void _enqueueSocial(Map<String, dynamic> message) {
+    _socialQueue.add(message);
+    if (_flushingQueue) return;
+    _flushingQueue = true;
+    _flushSocialLoop();
+  }
+
+  //消费循环：每 _socialGap 显示一条，队列清空即退出；期间新入队消息由循环顺带消费
+  Future<void> _flushSocialLoop() async {
+    try {
+      while (_socialQueue.isNotEmpty) {
+        await Future<void>.delayed(_socialGap);
+        if (!mounted) return;
+        if (_socialQueue.isEmpty) continue; //等待期间被 _flushSocialQueueNow 清空
+        setState(() {
+          _entries = [..._entries, _socialQueue.removeAt(0)];
+          _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+        });
+        _scrollToBottom();
+      }
+    } finally {
+      _flushingQueue = false;
+    }
+  }
+
+  //把队列剩余群聊一次性全部上屏（发消息前调用：插话时聊天记录需完整呈现）
+  void _flushSocialQueueNow() {
+    if (_socialQueue.isEmpty) return;
+    final rest = List<Map<String, dynamic>>.of(_socialQueue);
+    _socialQueue.clear();
+    setState(() {
+      _entries = [..._entries, ...rest];
+      _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+    });
+    _scrollToBottom();
+  }
+
+  //等待群聊队列消费完成（轮询：收尾 reload 前调用，避免提前揭示未显示消息）
+  Future<void> _waitSocialFlushed() async {
+    while (_socialQueue.isNotEmpty || _flushingQueue) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
   }
 
   //轻提示（SnackBar，不阻断操作）
