@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show ValueNotifier, debugPrint;
+import 'package:flutter/foundation.dart'
+    show ValueNotifier, debugPrint, kDebugMode;
 import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:three_tutor/service/llm_client.dart';
@@ -106,7 +107,9 @@ class ThreeTutorService {
   //临时测试（验证上下文拼接，验证后可删）：打印每轮实际发送的 messages 结构快照——
   //只打印角色序列 + 简化标签（提示词→长度、用户→编号+头30字、翻书→工具参数、教材→长度），
   //不打印全文，观察拼接顺序是否如预期（追加/重放/缓存延续）。
-  static const bool _traceEnabled = true;
+  //trace 开关：仅 debug 构建生效（release 编译期剔除，对话片段不落 logcat）；
+  //临时排查 release 问题可临时改回 true
+  static const bool _traceEnabled = kDebugMode;
 
   void _traceMessages(
     List<Map<String, dynamic>> messages, {
