@@ -11,7 +11,8 @@ import 'package:tutor_chat/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
 //按需加载：优先渲染最近课次，上滑到顶加载更早课次（微信行为）
-//收发接线：judgeFlow 判定三态 → 对应服务方法；生成期间 Banner 替换为「正在输入中」并锁定输入框
+//收发接线：judgeFlow 判定三态 → 对应服务方法；生成期间输入框 hint 显示忙碌文案并锁定输入框，
+//会话列表预览同步显示（busy 静态表，见 TutorChatService）
 class GroupChatPage extends StatefulWidget {
   const GroupChatPage({super.key, required this.courseName});
 
@@ -257,8 +258,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
     }
   }
 
-  //重新生成群聊（临时测试入口）：确认 → 清旧 auto 行并刷新 → busy → 逐条弹出新生成；
-  //结束后 busy 清除由 finally 负责（busyVersion 触发重绘 + 全量重载，无需手动）
+  //重新生成群聊（调试入口，默认注释）：用途与恢复方法见 doc/05-调试.md
+  /*
   Future<void> _regenerateGroupChat() async {
     if (_busy) {
       _toast('上一条生成还未完成，请稍候');
@@ -311,6 +312,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       TutorChatService.setBusyForCourse(widget.courseName, '');
     }
   }
+  */
 
   //课程详情页按钮 pop 意图处理：start=开始上课（问候）/ end=今天就到这里（总结+课后更新）
   Future<void> _handleLessonAction(String action) async {
@@ -518,12 +520,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     : const Color(0xFF999999),
                 onPressed: () => setState(() => _socialMode = !_socialMode),
               ),
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: '重新生成群聊（临时测试）',
-              //存在 ended 课次即可重生成（lessons≥1 ⇔ 有已结束课次；最新课次可能是 idle）
-              onPressed: _lessons >= 1 ? _regenerateGroupChat : null,
-            ),
+            //重新生成群聊按钮已注释（调试入口，见 doc/05-调试.md）
+            // IconButton(
+            //   icon: const Icon(Icons.refresh),
+            //   tooltip: '重新生成群聊（临时测试）',
+            //   onPressed: _lessons >= 1 ? _regenerateGroupChat : null,
+            // ),
             IconButton(
               icon: const Icon(Icons.query_stats),
               tooltip: '课程详情',

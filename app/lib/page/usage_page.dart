@@ -336,55 +336,57 @@ class _UsagePageState extends State<UsagePage> {
       byLesson.putIfAbsent(r['lesson'] as String? ?? '无课次上下文', () => []).add(r);
     }
     return Container(
-      color: Colors.white,
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      child: ExpansionTile(
-        title: Text(course),
-        subtitle: Text(
-          '${rows.length} 次 · 入 $prompt · 出 $out · 命中率 ${rate.toStringAsFixed(1)}%',
-          style: const TextStyle(fontSize: 12),
-        ),
-        children: [
-          for (final e in byLesson.entries) ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  //lesson 存的是留档文件名（lesson-003.jsonl），展示去后缀
-                  e.key.replaceAll(RegExp(r'\.jsonl$'), ''),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF07C160),
+      child: Material(
+        color: Colors.white, //背景由 Material 承担（ExpansionTile 内部是 ListTile，水波纹可见）
+        child: ExpansionTile(
+          title: Text(course),
+          subtitle: Text(
+            '${rows.length} 次 · 入 $prompt · 出 $out · 命中率 ${rate.toStringAsFixed(1)}%',
+            style: const TextStyle(fontSize: 12),
+          ),
+          children: [
+            for (final e in byLesson.entries) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    //lesson 存的是留档文件名（lesson-003.jsonl），展示去后缀
+                    e.key.replaceAll(RegExp(r'\.jsonl$'), ''),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF07C160),
+                    ),
                   ),
                 ),
               ),
-            ),
-            for (final r in e.value)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '${_fmtTime(r['time'] as String? ?? '')} · ${r['scene'] ?? ''}',
-                        style: const TextStyle(fontSize: 13),
+              for (final r in e.value)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${_fmtTime(r['time'] as String? ?? '')} · ${r['scene'] ?? ''}',
+                          style: const TextStyle(fontSize: 13),
+                        ),
                       ),
-                    ),
-                    Text(
-                      '入 ${_num(r, 'input') + _num(r, 'cacheRead')}'
-                      '（命中 ${_num(r, 'cacheRead')}）出 ${_num(r, 'output')}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF666666),
+                      Text(
+                        '入 ${_num(r, 'input') + _num(r, 'cacheRead')}'
+                        '（命中 ${_num(r, 'cacheRead')}）出 ${_num(r, 'output')}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF666666),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            const SizedBox(height: 4),
+              const SizedBox(height: 4),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

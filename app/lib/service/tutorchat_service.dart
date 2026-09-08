@@ -527,7 +527,9 @@ class TutorChatService {
         scene: '更新',
         messages: messages,
         stream: false,
-        jsonMode: true,
+        //不开 jsonMode（response_format）了：DeepSeek 文档明确该模式有概率返回空
+        //content（叠加思考模式更易触发，2026-09-08 遗传学实测两连空），服务端 bug
+        //绕开优于对抗；update.md 已严格约束纯 JSON 输出，_extractJson 负责兼容围栏
         maxTokens: 4096, //防 JSON 截断
         thinkingEffort: 'low', //格式化 JSON 生成用低强度思考（disabled 会复读指令不执行）
         label: '更新',

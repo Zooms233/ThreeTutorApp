@@ -163,12 +163,14 @@ class LlmClient {
     void Function(String delta)? onDelta,
     String? label,
   }) async {
-    final body = jsonEncode({
+    final bodyMap = {
       'model': config.model,
       'stream': stream,
       if (stream) 'stream_options': {'include_usage': true}, //流式末尾附带 usage
       if (jsonMode) 'response_format': {'type': 'json_object'},
-      ?maxTokens: maxTokens,
+      //null-aware 值：maxTokens 为 null 时整个条目省略（键恒为 'max_tokens' 字符串；
+      //此前误写为 ?maxTokens: maxTokens，把值 4096 当成了键，导致仅课后更新场景编码失败）
+      'max_tokens': ?maxTokens,
       if (thinkingEffort != null) ...{
         'thinking': {
           'type': thinkingEffort == 'disabled' ? 'disabled' : 'enabled',
@@ -176,7 +178,18 @@ class LlmClient {
         if (thinkingEffort != 'disabled') 'reasoning_effort': thinkingEffort,
       },
       'messages': messages,
-    });
+    };
+    final String body;
+    try {
+      body = jsonEncode(bodyMap);
+    } on JsonUnsupportedObjectError catch (e) {
+      //编码失败的详细诊断（键值类型列表），保留：转 LlmException 避免穿透上层 catch 链
+      final src = e.unsupportedObject;
+      final detail = src is Map
+          ? src.entries.map((e) => '${e.key}=${e.value.runtimeType}').join(', ')
+          : '${src.runtimeType}: $src';
+      throw LlmException('请求体编码失败（不可编码对象：$detail）');
+    }
 
     var attempt = 0;
     while (true) {

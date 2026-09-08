@@ -58,7 +58,9 @@ class StorageService {
     final files = <File>[];
     for (final entity in worldDir.listSync()) {
       final fileName = entity.path.split(Platform.pathSeparator).last;
-      if (entity is File && fileName.startsWith('tutor_') && fileName.endsWith('.json')) {
+      if (entity is File &&
+          fileName.startsWith('tutor_') &&
+          fileName.endsWith('.json')) {
         files.add(entity);
       }
     }
@@ -66,7 +68,8 @@ class StorageService {
 
     final result = <Map<String, dynamic>>[];
     for (final file in files) {
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final data =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       result.add({
         'file': file.path.split(Platform.pathSeparator).last, //文件名，点击导师时据此读取档案
         'name': data['name'],
@@ -122,7 +125,8 @@ class StorageService {
       final courseDir = await getCourseDir(course);
       final file = File('${courseDir.path}/$fileName');
       if (!file.existsSync()) continue;
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final data =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       if (data['name'] == tutorName) matched.add(course);
     }
     return matched;
@@ -149,7 +153,9 @@ class StorageService {
       final worldDir = await getWorldDir(worldName);
       for (final entity in worldDir.listSync()) {
         final fileName = entity.path.split(Platform.pathSeparator).last;
-        if (entity is File && fileName.startsWith('tutor_') && fileName.endsWith('.json')) {
+        if (entity is File &&
+            fileName.startsWith('tutor_') &&
+            fileName.endsWith('.json')) {
           await entity.copy('${courseDir.path}/$fileName');
         }
       }
@@ -164,9 +170,11 @@ class StorageService {
       );
 
       //STATE 初值：从 tutor_a 开始轮换，课程名仅记目录名不写入
-      final firstTutor = jsonDecode(
-        await File('${courseDir.path}/tutor_a.json').readAsString(),
-      ) as Map<String, dynamic>;
+      final firstTutor =
+          jsonDecode(
+                await File('${courseDir.path}/tutor_a.json').readAsString(),
+              )
+              as Map<String, dynamic>;
       await File('${courseDir.path}/STATE.json').writeAsString(
         jsonEncode({
           'position': '', //无教材模式为空
@@ -189,7 +197,8 @@ class StorageService {
       if (courseDir.existsSync()) {
         try {
           await courseDir.delete(recursive: true);
-        } catch (_) {//清理失败不掩盖原始错误
+        } catch (_) {
+          //清理失败不掩盖原始错误
         }
       }
       return '创建失败：$e';
@@ -227,11 +236,12 @@ class StorageService {
 
       //meta 取最新文件首行；最后一条 message 跨文件从后往前找——
       //群聊讨论写在上一课文件尾，最新消息可能在倒数第二个文件（四段文件组织）
-      final meta = jsonDecode((await files.last.readAsLines()).first) as Map<String, dynamic>;
+      final meta =
+          jsonDecode((await files.last.readAsLines()).first)
+              as Map<String, dynamic>;
       Map<String, dynamic>? lastMessage;
       for (var i = files.length - 1; i >= 0 && lastMessage == null; i--) {
-        final lines = (await files[i]
-                .readAsString())
+        final lines = (await files[i].readAsString())
             .split('\n')
             .where((l) => l.trim().isNotEmpty)
             .toList();
@@ -297,7 +307,9 @@ class StorageService {
         }
       }
       int lessonNo(String path) {
-        final m = RegExp(r'(\d+)课').firstMatch(path.split(Platform.pathSeparator).last);
+        final m = RegExp(
+          r'(\d+)课',
+        ).firstMatch(path.split(Platform.pathSeparator).last);
         return m == null ? 0 : int.parse(m.group(1)!);
       }
 
@@ -331,19 +343,15 @@ class StorageService {
     String tutor,
   ) async {
     final path = await lessonPath(courseName, lesson);
-    await Directory('${(await getCourseDir(courseName)).path}/CHAT').create(recursive: true);
+    await Directory(
+      '${(await getCourseDir(courseName)).path}/CHAT',
+    ).create(recursive: true);
     if (!File(path).existsSync()) {
       final now = DateTime.now();
       final date =
           '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       await File(path).writeAsString(
-        '${jsonEncode({
-          'type': 'meta',
-          'lesson': lesson,
-          'date': date,
-          'tutor': tutor,
-          'status': 'idle',
-        })}\n',
+        '${jsonEncode({'type': 'meta', 'lesson': lesson, 'date': date, 'tutor': tutor, 'status': 'idle'})}\n',
       );
     }
     return path;
@@ -352,11 +360,10 @@ class StorageService {
   //meta 整行改写：合并 patch 后重写首行（status 推进 idle→ongoing→ended、date 改写实际完成日）
   Future<void> patchChatMeta(String path, Map<String, dynamic> patch) async {
     final file = File(path);
-    final lines = (await file.readAsLines()).where((l) => l.trim().isNotEmpty).toList();
-    final meta = {
-      ...jsonDecode(lines.first) as Map<String, dynamic>,
-      ...patch,
-    };
+    final lines = (await file.readAsLines())
+        .where((l) => l.trim().isNotEmpty)
+        .toList();
+    final meta = {...jsonDecode(lines.first) as Map<String, dynamic>, ...patch};
     lines[0] = jsonEncode(meta);
     await file.writeAsString("${lines.join('\n')}\n");
   }
@@ -366,11 +373,17 @@ class StorageService {
     var files = await listChatFiles(courseName);
     if (files.isEmpty) {
       final state = await loadCourseState(courseName);
-      await createLessonFile(courseName, 1, state['next_tutor'] as String? ?? '导师');
+      await createLessonFile(
+        courseName,
+        1,
+        state['next_tutor'] as String? ?? '导师',
+      );
       files = await listChatFiles(courseName);
     }
     final path = files.last;
-    final meta = jsonDecode((await File(path).readAsLines()).first) as Map<String, dynamic>;
+    final meta =
+        jsonDecode((await File(path).readAsLines()).first)
+            as Map<String, dynamic>;
     return {
       'path': path,
       'tutor': meta['tutor'] as String? ?? '导师',
@@ -392,9 +405,9 @@ class StorageService {
   Future<Map<String, dynamic>?> loadLatestChatMeta(String courseName) async {
     final files = await listChatFiles(courseName);
     if (files.isEmpty) return null;
-    final lines = (await File(files.last).readAsLines())
-        .where((l) => l.trim().isNotEmpty)
-        .toList();
+    final lines = (await File(
+      files.last,
+    ).readAsLines()).where((l) => l.trim().isNotEmpty).toList();
     if (lines.isEmpty) return null;
     return jsonDecode(lines.first) as Map<String, dynamic>;
   }
@@ -407,9 +420,7 @@ class StorageService {
     final file = File(path);
     final existing = await file.readAsString();
     final separator = existing.isEmpty || existing.endsWith('\n') ? '' : '\n';
-    await file.writeAsString(
-      '$existing$separator${jsonEncode(message)}\n',
-    );
+    await file.writeAsString('$existing$separator${jsonEncode(message)}\n');
   }
 
   //课程内导师名 → 档案文件名映射（消息头像按名查找对应图片）
@@ -421,7 +432,8 @@ class StorageService {
       if (entity is File &&
           fileName.startsWith('tutor_') &&
           fileName.endsWith('.json')) {
-        final data = jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
+        final data =
+            jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
         map[data['name'] as String? ?? ''] = fileName;
       }
     }
@@ -437,8 +449,8 @@ class StorageService {
   }
 
   //更新学习者档案的三个可编辑字段（关系页编辑入口）：
-  //只覆盖 name/motivation/extra，identity/story 是世界档案固有，物理上碰不到；
-  //prompt 每次请求现读本文件，保存后下一句话即生效，无迁移问题
+  //LEARNER.json 只含 name/motivation/extra 三个字段，全量覆盖即可；
+  //prompt 每次请求现读本文件，保存后下一句话即生效
   Future<void> saveLearnerFields(
     String courseName, {
     required String name,
@@ -475,7 +487,8 @@ class StorageService {
     files.sort((a, b) => a.path.compareTo(b.path));
 
     for (final file in files) {
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final data =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       tutors.add({'name': data['name'], 'relation': data['relation']});
     }
     return tutors;
@@ -490,13 +503,18 @@ class StorageService {
   }
 
   //STATE 单行重写（课后更新第 1 步：position/next_tutor/lessons/last_date）
-  Future<void> saveCourseState(String courseName, Map<String, dynamic> state) async {
+  Future<void> saveCourseState(
+    String courseName,
+    Map<String, dynamic> state,
+  ) async {
     final courseDir = await getCourseDir(courseName);
     await File('${courseDir.path}/STATE.json').writeAsString(jsonEncode(state));
   }
 
   //读取课程 PROGRESS.jsonl（每行一个知识点；展示时新知识点在前）
-  Future<List<Map<String, dynamic>>> loadCourseProgress(String courseName) async {
+  Future<List<Map<String, dynamic>>> loadCourseProgress(
+    String courseName,
+  ) async {
     final courseDir = await getCourseDir(courseName);
     final file = File('${courseDir.path}/PROGRESS.jsonl');
     if (!file.existsSync()) return [];
@@ -531,32 +549,6 @@ class StorageService {
       await courseDir.delete(recursive: true);
     }
   }
-
-  /* 上课动态（热力图数据，暂缓）：扫描全部课程 CHAT 文件的 meta.date 按日聚合计数。
-     文件模型改为「第N课.jsonl」后数据源需重新设计，恢复时取消注释。
-  //上课动态：扫描全部课程 CHAT 文件的 meta.date，按日期聚合计数（热力图数据，现扫现算）
-  Future<Map<String, int>> listLessonDates() async {
-    final counts = <String, int>{};
-
-    for (final course in await listCourses()) {
-      final chatDir = Directory('${(await getCourseDir(course)).path}/CHAT');
-      if (!chatDir.existsSync()) continue;
-      for (final entity in chatDir.listSync()) {
-        if (entity is! File || !entity.path.endsWith('.jsonl')) continue;
-        final lines = (await entity.readAsLines())
-            .where((l) => l.trim().isNotEmpty)
-            .toList();
-        if (lines.isEmpty) continue;
-        final meta = jsonDecode(lines.first) as Map<String, dynamic>;
-        final date = meta['date'] as String?;
-        if (date != null && date.isNotEmpty) {
-          counts[date] = (counts[date] ?? 0) + 1;
-        }
-      }
-    }
-    return counts;
-  }
-  */
 
   //读取 CONFIG.json（不存在返回空 Map）
   Future<Map<String, dynamic>> loadConfig() async {
@@ -611,7 +603,8 @@ class StorageService {
       if (line.trim().isEmpty) continue;
       try {
         rows.add(jsonDecode(line) as Map<String, dynamic>);
-      } catch (_) {//坏行跳过
+      } catch (_) {
+        //坏行跳过
       }
     }
     return rows;
