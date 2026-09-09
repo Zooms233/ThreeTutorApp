@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 网络权限：debug/profile 清单自带 INTERNET，release 构建不继承——缺失时
+         手机上所有域名解析直接失败（Failed host lookup, errno = 7） -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- 数据存放在公共 Documents/ThreeTutor：Android 11+ 需要所有文件访问权限，首次启动引导授权 -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
     <application
