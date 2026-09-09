@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData, rootBundle;
 import 'package:three_tutor/page/usage_page.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
@@ -106,13 +107,14 @@ class _TabSettingState extends State<TabSetting> {
     if (matched.isEmpty) {
       return Container(
         margin: const EdgeInsets.all(16),
-        child: const Material(
+        child: Material(
           color: Colors.white,
           child: ListTile(
-            leading: Icon(Icons.vpn_key_outlined),
-            title: Text('API 未配置'),
-            subtitle: Text('点击设置服务商、模型与 Key'),
-            trailing: Icon(Icons.chevron_right),
+            leading: const Icon(Icons.vpn_key_outlined),
+            title: const Text('API 未配置'),
+            subtitle: const Text('点击设置服务商、模型与 Key'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _showApiConfigDialog, //未配置时同样可点进配置对话框
           ),
         ),
       );
