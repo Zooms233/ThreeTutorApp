@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, rootBundle;
 import 'package:three_tutor/page/usage_page.dart';
+import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
 
@@ -71,39 +74,33 @@ class _TabSettingState extends State<TabSetting> {
     'openai': ('OpenAI 兼容', '', ''),
   };
 
-  //配置档：服务商+模型+Key 三者配套（不同 Key 对应不同接口/模型，不可拆分管理）。
-  //惰性迁移：旧配置无 profiles 时，把顶层 apiUrl/model/apiKey 组装为首档（不落盘，保存时才写入）。
+  //配置档：id+名称+服务商+模型+Key 五件套（id 稳定标识，name 纯显示可随时改）。
+  //读时解混淆 Key：内存态全明文，遮显/编辑/检验直接操作明文，落盘时才混淆
   List<Map<String, dynamic>> get _profiles {
     final list = [
       for (final p in (_config['profiles'] as List? ?? []))
         Map<String, dynamic>.from(p as Map),
     ];
-    if (list.isEmpty && (_config['apiKey'] as String? ?? '').isNotEmpty) {
-      final url = _config['apiUrl'] as String? ?? '';
-      final isDeepseek = url == _providers['deepseek']!.$2;
-      list.add({
-        'name': isDeepseek ? 'DeepSeek 官方' : 'OpenAI 兼容',
-        'provider': isDeepseek ? 'deepseek' : 'openai',
-        'apiUrl': url,
-        'model': _config['model'] as String? ?? '',
-        'apiKey': _config['apiKey'],
-      });
+    for (final p in list) {
+      p['apiKey'] = deobfuscateKey(p['apiKey'] as String? ?? '');
     }
     return list;
   }
 
-  //使用中配置档名；失效（被删/未迁移）时回落首档，空列表返回空串
-  String get _activeName {
-    final name = _config['active'] as String? ?? '';
-    final profiles = _profiles;
-    if (profiles.any((p) => p['name'] == name)) return name;
-    return profiles.isEmpty ? '' : profiles.first['name'] as String;
-  }
+  //使用中配置档 id：直读 active 字段；null/悬空 = 未激活状态。
+  //不回落首档——与 service._config() 保持同一语义（指针断了就是未配置），
+  //避免摘要卡显示“在用某档”而聊天却报“API 未配置”的分叉
+  String? get _activeId => _config['active'] as String?;
+
+  //新配置档 id：毫秒时间戳 + 2 位随机后缀（本地唯一即可）
+  String _newProfileId() =>
+      '${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(90) + 10}';
 
   //当前 API 配置摘要卡：使用中档的 名称/模型/Key 遮显；点击进入配置对话框
   Widget _buildApiSummary() {
     if (_loading) return const SizedBox.shrink();
-    final matched = _profiles.where((p) => p['name'] == _activeName).toList();
+    final activeId = _activeId;
+    final matched = _profiles.where((p) => p['id'] == activeId).toList();
     if (matched.isEmpty) {
       return Container(
         margin: const EdgeInsets.all(16),
@@ -233,7 +230,7 @@ class _TabSettingState extends State<TabSetting> {
   //所有改动在对话框内存态，点「保存」一次性落盘 CONFIG.json（取消即丢弃）。
   Future<void> _showApiConfigDialog() async {
     var profiles = _profiles;
-    var active = _activeName;
+    var active = _activeId; //null = 未选中任何档（空状态）
     var testing = false; //连通性检验进行中
     bool? testOk; //检验结果（null=未检验）
     String? testMsg; //检验结果描述
@@ -254,7 +251,7 @@ class _TabSettingState extends State<TabSetting> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      active == p['name']
+                      active == p['id']
                           ? Icons.radio_button_checked
                           : Icons.radio_button_unchecked,
                       size: 20,
@@ -266,8 +263,9 @@ class _TabSettingState extends State<TabSetting> {
                       ' · ${p['model']} · ${_maskKey(p['apiKey'] as String? ?? '')}',
                       style: const TextStyle(fontSize: 12),
                     ),
+                    //切换 = 直接改 active；点已选中档保持不变
                     onTap: () =>
-                        setDialogState(() => active = p['name'] as String),
+                        setDialogState(() => active = p['id'] as String),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -287,12 +285,9 @@ class _TabSettingState extends State<TabSetting> {
                             setDialogState(() {
                               profiles = <Map<String, dynamic>>[
                                 for (final q in profiles)
-                                  q['name'] == p['name'] ? edited : q,
+                                  q['id'] == p['id'] ? edited : q,
                               ];
-                              //编辑中的档若被改名且是选中档 → 同步 active
-                              if (active == p['name']) {
-                                active = edited['name']!;
-                              }
+                              //id 稳定：改名不再牵动 active
                             });
                           },
                         ),
@@ -307,14 +302,12 @@ class _TabSettingState extends State<TabSetting> {
                             if (confirmed != true) return; //取消即不动
                             setDialogState(() {
                               profiles = <Map<String, dynamic>>[
-                                ...profiles.where(
-                                  (q) => q['name'] != p['name'],
-                                ),
+                                ...profiles.where((q) => q['id'] != p['id']),
                               ];
-                              if (active == p['name']) {
+                              if (active == p['id']) {
                                 active = profiles.isEmpty
-                                    ? ''
-                                    : profiles.first['name'] as String;
+                                    ? null
+                                    : profiles.first['id'] as String;
                               }
                             });
                           },
@@ -340,12 +333,13 @@ class _TabSettingState extends State<TabSetting> {
                         ],
                       );
                       if (added == null) return;
-                      setDialogState(
-                        () => profiles = <Map<String, dynamic>>[
+                      setDialogState(() {
+                        profiles = <Map<String, dynamic>>[
                           ...profiles,
                           added,
-                        ],
-                      );
+                        ];
+                        active = added['id'] as String; //新档即选中：检验/保存直接生效
+                      });
                     },
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('添加配置'),
@@ -375,9 +369,9 @@ class _TabSettingState extends State<TabSetting> {
                   ? null
                   : () async {
                       //检验选中档（新填/编辑的档先确定回列表再选中它测）
-                      final sel = profiles
-                          .where((p) => p['name'] == active)
-                          .toList();
+                      final sel = active == null
+                          ? <Map<String, dynamic>>[]
+                          : profiles.where((p) => p['id'] == active).toList();
                       if (sel.isEmpty) {
                         setDialogState(() {
                           testing = false;
@@ -420,32 +414,27 @@ class _TabSettingState extends State<TabSetting> {
     );
     if (saved != true || !mounted) return; //用户取消，全部改动丢弃
 
-    //落盘：选中档同步到顶层三字段（LLM 调用层唯一事实，调用层不感知配置档概念）
-    final sel = profiles.where((p) => p['name'] == active).toList();
-    if (sel.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('请先添加并选中一个配置'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-    final p = sel.first;
+    //落盘：顶层仅 active（激活档 id，null = 无激活配置），不再冗余镜像选中档三字段；
+    //Key 混淆后写入（防公共目录下明文扫描）；空 profiles 也允许保存 = 无 API 配置状态
     final next = {
-      'profiles': profiles,
+      'profiles': [
+        for (final q in profiles)
+          {
+            ...q,
+            'apiKey': obfuscateKey(q['apiKey'] as String? ?? ''),
+          },
+      ],
       'active': active,
-      'apiUrl': p['apiUrl'],
-      'model': p['model'],
-      'apiKey': p['apiKey'],
     };
     setState(() => _config = next);
     await StorageService().saveConfig(next);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('API 配置已保存'),
-        duration: Duration(seconds: 1),
+      SnackBar(
+        content: Text(
+          profiles.isEmpty ? '已保存（当前无 API 配置）' : 'API 配置已保存',
+        ),
+        duration: const Duration(seconds: 1),
       ),
     );
   }
@@ -654,6 +643,7 @@ class _TabSettingState extends State<TabSetting> {
       return null;
     }
     return {
+      'id': existing?['id'] as String? ?? _newProfileId(), //编辑沿用原 id
       'name': name,
       'provider': provider,
       'apiUrl': apiUrl,

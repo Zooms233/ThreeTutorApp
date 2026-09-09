@@ -21,12 +21,6 @@ class LlmConfig {
     required this.model,
   });
 
-  factory LlmConfig.fromMap(Map<String, dynamic> map) => LlmConfig(
-    apiUrl: map['apiUrl'] as String? ?? '',
-    apiKey: map['apiKey'] as String? ?? '',
-    model: map['model'] as String? ?? '',
-  );
-
   bool get isReady =>
       apiUrl.isNotEmpty && apiKey.isNotEmpty && model.isNotEmpty;
 

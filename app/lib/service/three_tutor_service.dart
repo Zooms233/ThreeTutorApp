@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'
     show ValueNotifier, debugPrint, kDebugMode;
 import 'package:flutter/services.dart' show rootBundle;
 
+import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/prompt.dart';
 import 'package:three_tutor/service/storage.dart';
@@ -56,8 +57,25 @@ class ThreeTutorService {
 
   // —— 基础 ——
 
-  Future<LlmConfig> _config() async =>
-      LlmConfig.fromMap(await _storage.loadConfig());
+  //激活档解析：按 active id 从 profiles 取（active 为 null/悬空 = 无激活配置）。
+  //Key 读时解混淆；无配置直接抛可读异常，由各场景现有错误展示链路提示用户完善
+  Future<LlmConfig> _config() async {
+    final config = await _storage.loadConfig();
+    final activeId = config['active'] as String?;
+    final sel = <Map<String, dynamic>>[
+      for (final p in (config['profiles'] as List? ?? []))
+        if (p is Map && p['id'] == activeId) Map<String, dynamic>.from(p),
+    ];
+    if (sel.isEmpty) {
+      throw LlmException('API 未配置，请到「设置 → API 配置」完善');
+    }
+    final p = sel.first;
+    return LlmConfig(
+      apiUrl: p['apiUrl'] as String? ?? '',
+      apiKey: deobfuscateKey(p['apiKey'] as String? ?? ''),
+      model: p['model'] as String? ?? '',
+    );
+  }
 
   Future<String> _courseDir(String courseName) async =>
       (await _storage.getCourseDir(courseName)).path;
