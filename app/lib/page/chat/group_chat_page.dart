@@ -7,8 +7,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
-import 'package:flutter/services.dart'
-    show Clipboard, ClipboardData;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -17,7 +16,8 @@ import 'package:three_tutor/page/chat/course_detail_page.dart';
 import 'package:three_tutor/service/llm_client.dart' show LlmException;
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
-import 'package:three_tutor/widget/chat_card.dart' show ChatCardView, normalizeItalic;
+import 'package:three_tutor/widget/chat_card.dart'
+    show ChatCardView, normalizeItalic;
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
@@ -568,9 +568,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
         return;
       }
       //卡片只渲染消息与翻书提示行（meta / tool_call 中间轮不渲染）
-      final entries = (await StorageService().loadChatFile(target))
-          .where((e) => e['type'] == 'message' || e['type'] == 'tool')
-          .toList();
+      final entries = (await StorageService().loadChatFile(
+        target,
+      )).where((e) => e['type'] == 'message' || e['type'] == 'tool').toList();
       if (entries.isEmpty) {
         _toast('本课没有可分享的消息');
         return;
@@ -592,8 +592,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
       });
       await Future<void>.delayed(const Duration(milliseconds: 350));
       if (!mounted) return;
-      final boundary = _cardKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
+      final boundary =
+          _cardKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
       if (boundary == null || !boundary.hasSize || boundary.size.isEmpty) {
         _toast('卡片渲染失败，请重试');
         return;
@@ -611,23 +611,26 @@ class _GroupChatPageState extends State<GroupChatPage> {
       final bytes = byteData.buffer.asUint8List();
       await tmpFile.writeAsBytes(bytes);
       if (!mounted) return;
-      //保存：桌面端弹保存对话框选位置（file_selector）；平台不支持或用户取消时
-      //回退临时目录文件，用系统查看器打开预览——转发/发送交给系统应用，
+      //保存：仅桌面端弹保存对话框选位置（file_selector 的 getSaveLocation 在
+      //Android/iOS 未实现，抛 UnimplementedError）；移动端直接用临时目录文件，
+      //用系统查看器打开预览——转发/发送交给系统应用，
       //（share_plus 在 Windows 端 MissingPluginException，弃用；仅生成图片更简单可靠）
       var savedPath = tmpFile.path;
-      try {
-        final location = await getSaveLocation(
-          suggestedName: '第$lesson课_${widget.courseName}_聊天卡片.png',
-          acceptedTypeGroups: const [
-            XTypeGroup(label: 'PNG 图片', extensions: <String>['png']),
-          ],
-        );
-        if (location != null) {
-          savedPath = location.path;
-          await File(savedPath).writeAsBytes(bytes);
+      if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+        try {
+          final location = await getSaveLocation(
+            suggestedName: '第$lesson课_${widget.courseName}_聊天卡片.png',
+            acceptedTypeGroups: const [
+              XTypeGroup(label: 'PNG 图片', extensions: <String>['png']),
+            ],
+          );
+          if (location != null) {
+            savedPath = location.path;
+            await File(savedPath).writeAsBytes(bytes);
+          }
+        } catch (_) {
+          //保存对话框异常：沿用临时目录方案
         }
-      } on Exception {
-        //平台不支持保存对话框（如 iOS）：沿用临时目录方案
       }
       if (!mounted) return;
       final result = await OpenFilex.open(savedPath);
@@ -728,7 +731,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
     //从未上课：只显示加入群聊的系统行（此后不存在空白消息页）
     if (entries.isEmpty) {
-      items.add(const _ChatItem.divider('你加入了群聊，现在可以开始聊天了'));
+      items.add(const _ChatItem.divider('你加入了群聊，右上角切换上课/下课状态'));
       return items;
     }
 
@@ -755,18 +758,23 @@ class _GroupChatPageState extends State<GroupChatPage> {
         final section = entry['section'] as String?;
         if (path != null) {
           final label = '查阅材料：$path${offset != null ? ' 第$offset行起' : ''}';
-          items.add(_ChatItem.divider(
-            '📖 $name $label',
-            linkText: label,
-            linkPath: '$_courseDirPath/$path', //新格式 path 为课程目录下相对路径
-          ));
+          items.add(
+            _ChatItem.divider(
+              '📖 $name $label',
+              linkText: label,
+              linkPath: '$_courseDirPath/$path', //新格式 path 为课程目录下相对路径
+            ),
+          );
         } else if (file != null && section != null) {
           final label = '翻阅教材：$file > $section';
-          items.add(_ChatItem.divider(
-            '📖 $name $label',
-            linkText: label,
-            linkPath: '$_courseDirPath/TEXTBOOK/$file', //旧格式 file 为 TEXTBOOK/ 下文件名
-          ));
+          items.add(
+            _ChatItem.divider(
+              '📖 $name $label',
+              linkText: label,
+              linkPath:
+                  '$_courseDirPath/TEXTBOOK/$file', //旧格式 file 为 TEXTBOOK/ 下文件名
+            ),
+          );
         } else {
           items.add(_ChatItem.divider('📖 $name 查阅材料（内容暂不可用）'));
         }
@@ -1296,7 +1304,6 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     ),
                     style: IconButton.styleFrom(
                       backgroundColor: canSend
-
                           ? const Color(0xFF07C160)
                           : const Color(0xFFD8D8D8),
                       minimumSize: const Size(40, 40),
