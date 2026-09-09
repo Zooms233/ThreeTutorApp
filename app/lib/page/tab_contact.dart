@@ -272,7 +272,7 @@ class _TabContactState extends State<TabContact> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        //背景与滚动行为继承全局 appBarTheme（微信浅灰顶栏）
+        //背景与滚动行为继承全局 appBarTheme（浅灰顶栏）
         title: const Text('三人师'),
         actions: [
           PopupMenuButton(
@@ -340,7 +340,7 @@ class _TabContactState extends State<TabContact> {
     );
   }
 
-  //灰色小字分组标题（微信风格：与页面同底色，只靠小号灰字区分层级）
+  //灰色小字分组标题（与页面同底色，只靠小号灰字区分层级）
   //SizedBox 强制占满整行：ListView 子项默认按内容收缩并居中，不占满宽度文字就会居中
   Widget _buildGroupTitle(String world) {
     return SizedBox(
@@ -357,7 +357,7 @@ class _TabContactState extends State<TabContact> {
 
   //导师行：头像 + 导师名，点击进入导师资料页
   //头像自然把名字推到右侧，与贴左的分组标题形成层级（无需额外缩进）
-  //分割线从头像右侧起（16+40+16=72），微信样式
+  //分割线从头像右侧起（16+40+16=72），细线风格
   Widget _buildTutorRow(String world, Map<String, dynamic> tutor) {
     return Material(
       color: Colors.white,

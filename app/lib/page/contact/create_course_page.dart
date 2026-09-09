@@ -181,7 +181,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     );
   }
 
-  //白底输入块：灰色小字标签 + 无边框输入（微信表单风格）；trailing 为 label 行右侧动作
+  //白底输入块：灰色小字标签 + 无边框输入（无边框表单风格）；trailing 为 label 行右侧动作
   Widget _buildField(
     String label,
     TextEditingController controller, {

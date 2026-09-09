@@ -268,7 +268,7 @@ class StorageService {
         }
       }
 
-      //微信式预览：他人消息带发言人名，自己消息不带
+      //预览格式：他人消息带发言人名，自己消息不带
       final isUser = lastMessage?['role'] == 'user';
       final sender = isUser ? '' : '${lastMessage?['name'] ?? ''}: ';
       final preview = stripMarkdown(lastMessage?['content'] as String? ?? '');

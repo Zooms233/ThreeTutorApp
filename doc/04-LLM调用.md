@@ -50,7 +50,7 @@
 - 工具成功落档 `tool` 行：只存 `path`/`offset`/`limit` 指针，重放时物化读盘；失败落档 `content` 错误快照，重放直接用；旧格式 `file`/`section`（read_textbook 遗留）仍兼容物化
 - 首轮请求的 assistant(tool_calls)/tool 消息与重放均经 `PromptMessage.toMap()` 构造 → 键序字节一致 → 下次请求前缀命中延续（多轮翻书每轮新增量才计费）
 
-**UI**：翻书期间 busy 文案切「{导师} 正在翻阅教材…」；`tool` 行渲染为系统提示「📖 {导师} 查阅材料：path 第 N 行起」，`tool_call` 行不渲染。成功行的「查阅材料：…」部分染微信链接蓝（0xFF576B95）可点，点击经 `OpenFilex.open` 调系统「打开方式」用外部应用打开材料文件（Android 经插件内置 FileProvider 转 content://，其 external-path 覆盖公共 Documents 目录；Windows 走插件 `cmd /c start` 分支）——本应用不做预览，不定位行号（行号文字仅作信息展示）；文件已移除/无关联应用时 toast 提示。
+**UI**：翻书期间 busy 文案切「{导师} 正在翻阅教材…」；`tool` 行渲染为系统提示「📖 {导师} 查阅材料：path 第 N 行起」，`tool_call` 行不渲染。成功行的「查阅材料：…」部分染链接蓝（0xFF576B95）可点，点击经 `OpenFilex.open` 调系统「打开方式」用外部应用打开材料文件（Android 经插件内置 FileProvider 转 content://，其 external-path 覆盖公共 Documents 目录；Windows 走插件 `cmd /c start` 分支）——本应用不做预览，不定位行号（行号文字仅作信息展示）；文件已移除/无关联应用时 toast 提示。
 
 ## 触发与消息流向
 

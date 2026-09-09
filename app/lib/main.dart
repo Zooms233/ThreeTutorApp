@@ -43,23 +43,23 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         //fontFamily：思源黑体（内置 assets/fonts，Regular + Bold）；LaTeX 公式同步该字号与字距
         fontFamily: 'SourceHanSansCN',
-        //微信绿作为种子色：全局强调色（按钮、水波纹、选中态）
+        //绿 #07C160 作为种子色：全局强调色（按钮、水波纹、选中态）
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF07C160)),
-        //微信浅色模式基础底色：页面与顶栏同为浅灰，列表内容用白色行浮起
+        //浅色模式基础底色：页面与顶栏同为浅灰，列表内容用白色行浮起
         scaffoldBackgroundColor: const Color(0xFFEDEDED),
         appBarTheme: const AppBarTheme(
           backgroundColor: Color(0xFFEDEDED),
           scrolledUnderElevation: 0, //列表滚动时顶栏不因 surfaceTint 变色
         ),
-        //全局分割线：微信细线风格
+        //全局分割线：极细线风格
         dividerTheme: const DividerThemeData(
           color: Color(0xFFE5E5E5),
           thickness: 0.5,
         ),
-        //底部导航栏：微信白底 + 选中绿 / 未选中灰
+        //底部导航栏：白底 + 选中绿 / 未选中灰
         navigationBarTheme: NavigationBarThemeData(
           backgroundColor: Colors.white,
-          indicatorColor: const Color(0x1A07C160), //微信绿 10% 透明度的选中胶囊
+          indicatorColor: const Color(0x1A07C160), //绿 10% 透明度的选中胶囊
           iconTheme: WidgetStateProperty.resolveWith((states) {
             return states.contains(WidgetState.selected)
                 ? const IconThemeData(color: Color(0xFF07C160))
@@ -100,7 +100,7 @@ class _HomePageState extends State<HomePage> {
       builder: (_, pageIndex, _) => Scaffold(
         body: IndexedStack(index: pageIndex, children: pages),
         bottomNavigationBar: DecoratedBox(
-          //顶部细分割线，贴合微信底部栏样式
+          //顶部细分割线，贴合经典聊天应用底部栏样式
           decoration: const BoxDecoration(
             border: Border(
               top: BorderSide(color: Color(0xFFE5E5E5), width: 0.5),

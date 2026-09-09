@@ -57,7 +57,7 @@ class TutorAvatar extends StatelessWidget {
     final imageFile = _findImageFile();
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(size * 0.18), //微信式圆角方形
+      borderRadius: BorderRadius.circular(size * 0.18), //圆角方形
       child: SizedBox(
         width: size,
         height: size,

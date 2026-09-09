@@ -6,7 +6,7 @@ import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
-//聊天页 = 会话列表：每行一个课程群聊（微信会话样式）
+//聊天页 = 会话列表：每行一个课程群聊（会话列表样式）
 //群名 + 最后一条消息预览 + 时间；点击进入群聊页；更名/删除入口在 AppBar 齿轮菜单
 class TabChat extends StatefulWidget {
   const TabChat({super.key});
@@ -110,7 +110,7 @@ class _TabChatState extends State<TabChat> {
     //会话列表
     return ListView.separated(
       itemCount: _conversations.length,
-      //行间细分割线：从头像右侧起（微信样式）
+      //行间细分割线：从头像右侧起（细线风格）
       separatorBuilder: (_, _) => const Divider(height: 0.5, indent: 72),
       itemBuilder: (context, index) {
         final conversation = _conversations[index];
@@ -159,7 +159,7 @@ class _TabChatState extends State<TabChat> {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 4),
-                    //生成中：预览位置显示绿色小字（微信「对方正在输入…」同款）
+                    //生成中：预览位置显示绿色小字（「对方正在输入…」风格）
                     Text(
                       ThreeTutorService.busyLabelOf(name).isEmpty
                           ? preview

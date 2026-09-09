@@ -6,7 +6,7 @@ import 'package:three_tutor/widget/tutor_avatar.dart';
 import 'package:three_tutor/page/contact/tutor_profile_page.dart';
 import 'package:three_tutor/service/storage.dart';
 
-//导师资料页：微信联系人样式，从这里进档案、创建课程或进入已有课程群聊
+//导师资料页：联系人资料样式，从这里进档案、创建课程或进入已有课程群聊
 class TutorIntroPage extends StatefulWidget {
   const TutorIntroPage({
     super.key,
@@ -82,7 +82,7 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
 
     return ListView(
       children: [
-        //头部：白底块，头像左 + 名字/身份右（微信联系人样式）
+        //头部：白底块，头像左 + 名字/身份右（资料页头部样式）
         Container(
           width: double.infinity,
           color: Colors.white,
@@ -123,7 +123,7 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
             ],
           ),
         ),
-        const SizedBox(height: 8), //微信的灰色分组间隙
+        const SizedBox(height: 8), //灰色分组间隙
         //导师资料行：进入导师档案详情页
         _buildRow(
           '导师资料',
@@ -147,7 +147,7 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
     );
   }
 
-  //白色行按钮：标题左对齐 + 右侧箭头（微信资料页样式）
+  //白色行按钮：标题左对齐 + 右侧箭头（资料页行样式）
   Widget _buildRow(String title, {VoidCallback? onTap}) {
     return Material(
       color: Colors.white, //白底同时是按压水波纹的载体

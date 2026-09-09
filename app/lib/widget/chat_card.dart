@@ -3,7 +3,7 @@ import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //导出聊天卡片：单课次消息流的静态长图视图（离屏渲染 → RepaintBoundary 截图 → 系统分享）。
-//气泡样式与群聊页一致（微信风格），尾部带推广 footer；纯静态无交互。
+//气泡样式与群聊页一致（经典聊天气泡风格），尾部带推广 footer；纯静态无交互。
 
 //下划线斜体规范化：_文字_ → *文字*（gpt_markdown 的 ItalicMd 只认星号斜体，不认下划线）
 //开/闭下划线不贴 ASCII 字母数字（保护 file_name 类英文词内下划线与数字下标），内容首尾非空白
@@ -94,7 +94,7 @@ class ChatCardView extends StatelessWidget {
     return Container(
       width: width,
       padding: const EdgeInsets.all(14),
-      color: const Color(0xFFEDEDED), //微信聊天背景灰
+      color: const Color(0xFFEDEDED), //聊天背景灰
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: items,

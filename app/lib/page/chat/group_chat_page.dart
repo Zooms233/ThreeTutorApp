@@ -21,7 +21,7 @@ import 'package:three_tutor/widget/chat_card.dart'
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //群聊页：课程对话与课后闲聊同一消息流
-//按需加载：优先渲染最近课次，上滑到顶加载更早课次（微信行为）
+//按需加载：优先渲染最近课次，上滑到顶加载更早课次（主流 IM 行为）
 //收发接线：judgeFlow 判定三态 → 对应服务方法；生成期间输入框 hint 显示忙碌文案并锁定输入框，
 //会话列表预览同步显示（busy 静态表，见 ThreeTutorService）
 class GroupChatPage extends StatefulWidget {
@@ -77,7 +77,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   Widget? _shareCard; //待截图的卡片（非空时挂屏外渲染，截完即卸）
   bool _sharing = false; //导出进行中（按钮转圈防重复点击）
 
-  //群聊逐条上屏队列：onMessage 只入队，消费循环按固定间隔逐条显示（模拟微信聊天节奏）。
+  //群聊逐条上屏队列：onMessage 只入队，消费循环按固定间隔逐条显示（模拟真实聊天节奏）。
   //落档仍由 service 实时完成——队列仅控制 UI 呈现；退出重进走 _reload 全量显示（历史消息本就一次呈现）
   final List<Map<String, dynamic>> _socialQueue = [];
   bool _flushingQueue = false; //消费循环进行中（防重入 + busy 变更时 reload 避让判断）
@@ -894,7 +894,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   Widget _buildMessageList() {
     //长按/右键消息弹出操作菜单（复制/修改，见 _showMessageMenu），
-    //不再用 SelectionArea 自由选择文本（对齐微信：复制为整条源文本）
+    //不再用 SelectionArea 自由选择文本（复制为整条源文本）
     return ListView.builder(
       controller: _scrollController,
       reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
@@ -929,7 +929,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
               TextSpan(text: head),
               TextSpan(
                 text: item.linkText!,
-                style: const TextStyle(color: Color(0xFF576B95)), //微信链接蓝
+                style: const TextStyle(color: Color(0xFF576B95)), //链接蓝
               ),
             ],
           ),
@@ -990,14 +990,14 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   // —— 消息长按/右键菜单（复制 / 修改）——
 
-  //长按或右键消息：底部弹出操作菜单（微信风格深色半透明）。
+  //长按或右键消息：底部弹出操作菜单（深色半透明）。
   //复制：全部消息可用（复制 content 源文本）；修改：当前流最后一条用户消息额外可用
   Future<void> _showMessageMenu(Map<String, dynamic> message) async {
     final editFlow = await _editableFlowOf(message);
     if (!mounted) return;
     final action = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: const Color(0xE6484848), //深灰半透明（微信长按菜单风格）
+      backgroundColor: const Color(0xE6484848), //深灰半透明（长按菜单风格）
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
       ),
@@ -1036,7 +1036,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     }
   }
 
-  //菜单项：图标 + 文字（白色，微信深色菜单样式）
+  //菜单项：图标 + 文字（白色，深色菜单样式）
   Widget _menuItem(IconData icon, String label, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
@@ -1166,7 +1166,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   borderRadius: BorderRadius.only(
                     topLeft: Radius.circular(12),
                     topRight: Radius.circular(12),
-                    bottomLeft: Radius.circular(4), //靠头像侧小圆角（微信细节）
+                    bottomLeft: Radius.circular(4), //靠头像侧小圆角（气泡细节）
                     bottomRight: Radius.circular(12),
                   ),
                 ),
@@ -1191,7 +1191,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     );
   }
 
-  //用户消息：绿色气泡（微信 #95EC69）+ 头像，右对齐；群聊里自己消息不显示名字
+  //用户消息：绿色气泡（绿 #95EC69）+ 头像，右对齐；群聊里自己消息不显示名字
   Widget _buildUserMessage(String name, String content) {
     final maxWidth = MediaQuery.sizeOf(context).width * 0.72;
     return Container(
@@ -1210,7 +1210,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   topLeft: Radius.circular(12),
                   topRight: Radius.circular(12),
                   bottomLeft: Radius.circular(12),
-                  bottomRight: Radius.circular(4), //靠头像侧小圆角（微信细节）
+                  bottomRight: Radius.circular(4), //靠头像侧小圆角（气泡细节）
                 ),
               ),
               child: GptMarkdown(
@@ -1280,7 +1280,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   maxLines: 6, //多行输入，超过 6 行内部滚动
                   keyboardType: TextInputType.multiline,
                   decoration: InputDecoration(
-                    //生成期间输入框即状态位：文案显示 + 禁用（微信同款，替代顶部 Banner）
+                    //生成期间输入框即状态位：文案显示 + 禁用（替代顶部 Banner）
                     hintText: _busy ? _busyLabel : '输入消息…',
                     hintStyle: const TextStyle(fontSize: 13),
                     border: InputBorder.none,
@@ -1290,7 +1290,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 ),
               ),
               const SizedBox(width: 8),
-              //监听输入内容变化，实时启停发送按钮（微信式圆形绿底纸飞机）
+              //监听输入内容变化，实时启停发送按钮（圆形绿底纸飞机）
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: _inputController,
                 builder: (context, value, _) {
