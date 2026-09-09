@@ -7,6 +7,8 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -65,6 +67,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   String _latestStatus = ''; //最新课次 meta.status（toggle 显示判定；''=无课次）
   int _lessons = 0; //累计课时（toggle 显示判定：idle 且 ≥1）
   bool _socialMode = false; //课后交流切换：false=问答（默认）/ true=群聊讨论；仅会话内存不落盘
+  bool _editing = false; //修改模式：输入框内容将替换当前流最后一条用户消息并重生成回复
+  String _editFlow = ''; //修改定流（点「修改」时判定的 flow，提交沿用防中途切 toggle 漂移）
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
@@ -149,10 +153,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
     var entries = <Map<String, dynamic>>[];
     var loaded = 0;
     while (loaded < files.length) {
-      final chunk = await StorageService().loadChatFile(
-        files[files.length - 1 - loaded],
-      );
-      entries = [...chunk, ...entries];
+      final path = files[files.length - 1 - loaded];
+      final chunk = await StorageService().loadChatFile(path);
+      //标记来源文件（「修改」判定用：定位当前流目标文件的最后一条用户行）
+      entries = [
+        for (final e in chunk) {...e, '_file': path},
+        ...entries,
+      ];
       loaded++;
       final messageCount = entries.where((e) => e['type'] == 'message').length;
       if (messageCount >= _initialMinMessages) break;
@@ -180,11 +187,16 @@ class _GroupChatPageState extends State<GroupChatPage> {
     _loadingMore = true;
 
     final index = _files.length - _loadedCount - 1; //下一个要加载的更早课次
-    final earlier = await StorageService().loadChatFile(_files[index]);
+    final path = _files[index];
+    final earlier = await StorageService().loadChatFile(path);
 
     if (!mounted) return;
     setState(() {
-      _entries = [...earlier, ..._entries]; //更早条目插入头部，保持旧→新顺序
+      //更早条目插入头部（保持旧→新顺序），同样带来源文件标记
+      _entries = [
+        for (final e in earlier) {...e, '_file': path},
+        ..._entries,
+      ];
       _loadedCount++;
       _hasMore = _loadedCount < _files.length;
       _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
@@ -205,6 +217,10 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //并发写同一文件的竞态窗口；判定本身抛异常也由 finally 释放
   //失败时用户消息已留档（悬空），输入框解锁，重发时连续合并消化
   Future<void> _sendMessage() async {
+    if (_editing) {
+      await _submitEdit(); //修改模式：发送即提交修改
+      return;
+    }
     final text = _inputController.text.trim();
     if (text.isEmpty || _busy) return;
     _inputController.clear();
@@ -264,6 +280,77 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _scrollToBottom();
     } finally {
       //正常路径由 service 端 finally 清；此处兜底判定阶段异常（_setBusy 幂等，重清无害）
+      ThreeTutorService.setBusyForCourse(widget.courseName, '');
+    }
+  }
+
+  //提交修改（修改模式下点发送）：乐观更新（气泡立即改内容、旧回复链从屏上消失）
+  //→ service 改写落档并按原流重生成回复（flow 在点「修改」时已定死）→ reload 兑底校正。
+  //失败：toast 后内容放回输入框保持修改模式可重试（改写已发生时重试幂等）
+  Future<void> _submitEdit() async {
+    final text = _inputController.text.trim();
+    if (text.isEmpty || _busy) return;
+    _inputController.clear();
+    final flow = _editFlow;
+    final social = flow == 'social';
+
+    ThreeTutorService.setBusyForCourse(widget.courseName, '正在输入中…');
+    try {
+      //乐观更新：目标流文件最后一条 user 行改内容，其后同文件条目（本轮回复链）从屏上移除
+      final files = await StorageService().listChatFiles(widget.courseName);
+      final targetPath = social
+          ? files[files.length - 2] //修改入口已保证 ≥2 文件
+          : files.last;
+      final idx = _lastUserIndexOf(targetPath);
+      if (idx < 0) {
+        _toast('未找到可修改的消息');
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _entries = [
+          ..._entries.sublist(0, idx),
+          {..._entries[idx], 'content': text, 'time': _now()},
+          //其后同文件条目删除；跨文件条目（如最新文件的 qa 段）保留不受影响
+          ..._entries.sublist(idx + 1).where((e) => e['_file'] != targetPath),
+        ];
+        _items = _buildItems(_entries, hasMore: _hasMore).reversed.toList();
+        _editing = false;
+        _editFlow = '';
+      });
+      _scrollToBottom();
+
+      try {
+        await (flow == 'teaching'
+            ? _service.sendLessonMessage(
+                courseName: widget.courseName,
+                content: text,
+                edit: true,
+              )
+            : _service.sendUserMessage(
+                courseName: widget.courseName,
+                content: text,
+                social: social,
+                edit: true,
+              ));
+      } on LlmException catch (e) {
+        if (!mounted) return;
+        _toast('重新生成失败：$e\n内容已放回输入框，可重试');
+        setState(() {
+          _editing = true;
+          _editFlow = flow;
+          _inputController.text = text;
+          _inputController.selection = TextSelection.collapsed(
+            offset: _inputController.text.length,
+          );
+        });
+      }
+      //成功与否都从文件重载：成功同步新回复；失败校正屏显为文件实际内容
+      if (!mounted) return;
+      await _reload();
+      _scrollToBottom();
+    } finally {
+      //正常路径由 service 端 finally 清；此处兜底异常（_setBusy 幂等，重清无害）
       ThreeTutorService.setBusyForCourse(widget.courseName, '');
     }
   }
@@ -447,10 +534,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
     }
   }
 
-  //轻提示（SnackBar，不阻断操作）
-  void _toast(String message) {
+  //轻提示（SnackBar，不阻断操作）；duration 可定制（如复制提示用短时长）
+  void _toast(String message, {Duration? duration}) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+      SnackBar(
+        content: Text(message),
+        duration: duration ?? const Duration(seconds: 4),
+      ),
     );
   }
 
@@ -795,20 +885,19 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   Widget _buildMessageList() {
-    //SelectionArea：消息可长按选择复制（LaTeX 等自绘部分不可选，正文可选）
-    return SelectionArea(
-      child: ListView.builder(
-        controller: _scrollController,
-        reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _items.length,
-        itemBuilder: (context, index) {
-          final item = _items[index];
-          return item.text != null
-              ? _buildDivider(item)
-              : _buildMessage(item.message!);
-        },
-      ),
+    //长按/右键消息弹出操作菜单（复制/修改，见 _showMessageMenu），
+    //不再用 SelectionArea 自由选择文本（对齐微信：复制为整条源文本）
+    return ListView.builder(
+      controller: _scrollController,
+      reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: _items.length,
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        return item.text != null
+            ? _buildDivider(item)
+            : _buildMessage(item.message!);
+      },
     );
   }
 
@@ -891,15 +980,146 @@ class _GroupChatPageState extends State<GroupChatPage> {
     }
   }
 
-  //消息行：导师消息左对齐（头像+名字+白气泡），用户消息右对齐（绿气泡+头像）
+  // —— 消息长按/右键菜单（复制 / 修改）——
+
+  //长按或右键消息：底部弹出操作菜单（微信风格深色半透明）。
+  //复制：全部消息可用（复制 content 源文本）；修改：当前流最后一条用户消息额外可用
+  Future<void> _showMessageMenu(Map<String, dynamic> message) async {
+    final editFlow = await _editableFlowOf(message);
+    if (!mounted) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xE6484848), //深灰半透明（微信长按菜单风格）
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _menuItem(
+                Icons.copy_rounded,
+                '复制',
+                () => Navigator.pop(context, 'copy'),
+              ),
+              if (editFlow != null) ...[
+                const SizedBox(width: 36),
+                _menuItem(
+                  Icons.edit_rounded,
+                  '修改',
+                  () => Navigator.pop(context, 'edit'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'copy') {
+      await Clipboard.setData(
+        ClipboardData(text: message['content'] as String? ?? ''),
+      );
+      if (mounted) _toast('已复制', duration: const Duration(seconds: 1));
+    } else if (action == 'edit' && editFlow != null) {
+      _startEdit(message, editFlow);
+    }
+  }
+
+  //菜单项：图标 + 文字（白色，微信深色菜单样式）
+  Widget _menuItem(IconData icon, String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 26, color: Colors.white),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 12, color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  //「修改」可用性：返回当前流（teaching/qa/social，与发送同源 judgeFlow），不可用返回 null。
+  //条件：非 busy、非修改模式中、长按消息 = 当前流目标文件的物理最后一条用户行。
+  //目标流文件：teaching/qa → 最新课次文件；social → 倒数第二文件尾。
+  //该行之后只可能是本轮回复链（tool_call/tool/tutor），改写截断不波及 auto 群聊行与
+  //下课总结行（见 service._rewriteLastUser）
+  Future<String?> _editableFlowOf(Map<String, dynamic> message) async {
+    if (_busy || _editing) return null;
+    final flow = await _service.judgeFlow(
+      widget.courseName,
+      toggleActive: _socialMode,
+    );
+    final files = await StorageService().listChatFiles(widget.courseName);
+    final String targetPath;
+    if (flow == 'social') {
+      if (files.length < 2) return null; //不足两课时无 social 目标文件
+      targetPath = files[files.length - 2];
+    } else {
+      targetPath = files.last;
+    }
+    final idx = _lastUserIndexOf(targetPath);
+    return (idx >= 0 && identical(_entries[idx], message)) ? flow : null;
+  }
+
+  //_entries（物理序）中目标文件的最后一条 user 行下标；-1 = 未找到
+  int _lastUserIndexOf(String filePath) {
+    var idx = -1;
+    for (var i = 0; i < _entries.length; i++) {
+      final e = _entries[i];
+      if (e['_file'] != filePath) continue;
+      if (e['type'] == 'message' && e['role'] == 'user') idx = i;
+    }
+    return idx;
+  }
+
+  //进入修改模式：输入框继承原文（全选便于直接覆盖），flow 定死提交时沿用
+  void _startEdit(Map<String, dynamic> message, String flow) {
+    setState(() {
+      _editing = true;
+      _editFlow = flow;
+      _inputController.text = message['content'] as String? ?? '';
+      _inputController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _inputController.text.length,
+      );
+    });
+  }
+
+  //退出修改模式：清空输入框恢复普通发送
+  void _cancelEdit() {
+    setState(() {
+      _editing = false;
+      _editFlow = '';
+      _inputController.clear();
+    });
+  }
+
+  //消息行：导师消息左对齐（头像+名字+白气泡），用户消息右对齐（绿气泡+头像）；
+  //长按/右键弹操作菜单（复制，末条用户消息另有修改）
   Widget _buildMessage(Map<String, dynamic> message) {
     final role = message['role'] as String? ?? 'tutor';
     final name = message['name'] as String? ?? '';
     final content = message['content'] as String? ?? '';
 
-    return role == 'user'
-        ? _buildUserMessage(name, content)
-        : _buildTutorMessage(name, content);
+    return GestureDetector(
+      onLongPress: () => _showMessageMenu(message),
+      onSecondaryTapUp: (_) => _showMessageMenu(message), //桌面端右键同菜单
+      child: role == 'user'
+          ? _buildUserMessage(name, content)
+          : _buildTutorMessage(name, content),
+    );
   }
 
   //消息正文用 GptMarkdown 渲染：支持斜体旁白（*...* 与 _..._，后者渲染前规范化为前者）、标题、列表与 LaTeX 公式（$...$ 行内、$$...$$ 独立行）
@@ -1005,51 +1225,86 @@ class _GroupChatPageState extends State<GroupChatPage> {
     );
   }
 
-  //输入条：输入可用（发送按钮随内容与发送状态启停）
+  //输入条：输入可用（发送按钮随内容与发送状态启停）；
+  //修改模式时顶部显示提示条（发送即替换原消息，× 退出修改模式）
   Widget _buildInputBar() {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: TextField(
-              controller: _inputController,
-              enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
-              minLines: 1,
-              maxLines: 6, //多行输入，超过 6 行内部滚动
-              keyboardType: TextInputType.multiline,
-              decoration: InputDecoration(
-                //生成期间输入框即状态位：文案显示 + 禁用（微信同款，替代顶部 Banner）
-                hintText: _busy ? _busyLabel : '输入消息…',
-                hintStyle: const TextStyle(fontSize: 13),
-                border: InputBorder.none,
-                isDense: true,
+          if (_editing)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.fromLTRB(10, 4, 6, 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF2F2F2),
+                borderRadius: BorderRadius.circular(6),
               ),
-              style: const TextStyle(fontSize: 15),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '正在修改，发送后替换原消息并重新生成回复',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: _cancelEdit,
+                    child: const Icon(
+                      Icons.cancel,
+                      size: 16,
+                      color: Color(0xFF999999),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          //监听输入内容变化，实时启停发送按钮（微信式圆形绿底纸飞机）
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _inputController,
-            builder: (context, value, _) {
-              final canSend = value.text.trim().isNotEmpty && !_busy;
-              return IconButton(
-                onPressed: canSend ? _sendMessage : null,
-                icon: Icon(
-                  Icons.send_rounded,
-                  size: 20,
-                  color: canSend ? Colors.white : const Color(0xFFFFFFFF),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _inputController,
+                  enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
+                  minLines: 1,
+                  maxLines: 6, //多行输入，超过 6 行内部滚动
+                  keyboardType: TextInputType.multiline,
+                  decoration: InputDecoration(
+                    //生成期间输入框即状态位：文案显示 + 禁用（微信同款，替代顶部 Banner）
+                    hintText: _busy ? _busyLabel : '输入消息…',
+                    hintStyle: const TextStyle(fontSize: 13),
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+                  style: const TextStyle(fontSize: 15),
                 ),
-                style: IconButton.styleFrom(
-                  backgroundColor: canSend
-                      ? const Color(0xFF07C160)
-                      : const Color(0xFFD8D8D8),
-                  minimumSize: const Size(40, 40),
-                ),
-              );
-            },
+              ),
+              const SizedBox(width: 8),
+              //监听输入内容变化，实时启停发送按钮（微信式圆形绿底纸飞机）
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _inputController,
+                builder: (context, value, _) {
+                  final canSend = value.text.trim().isNotEmpty && !_busy;
+                  return IconButton(
+                    onPressed: canSend ? _sendMessage : null,
+                    icon: Icon(
+                      Icons.send_rounded,
+                      size: 20,
+                      color: canSend ? Colors.white : const Color(0xFFFFFFFF),
+                    ),
+                    style: IconButton.styleFrom(
+                      backgroundColor: canSend
+
+                          ? const Color(0xFF07C160)
+                          : const Color(0xFFD8D8D8),
+                      minimumSize: const Size(40, 40),
+                    ),
+                  );
+                },
+              ),
+            ],
           ),
         ],
       ),

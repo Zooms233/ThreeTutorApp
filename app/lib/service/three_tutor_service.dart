@@ -336,6 +336,28 @@ class ThreeTutorService {
     'content': content,
   });
 
+  //修改重发定位：改写文件中物理最后一条 user 行（content + time=编辑时刻）并截断其后所有行。
+  //安全性依据（UI 已判定长按消息 = 当前流目标文件的最后一条 user 行）：该行之后只可能是
+  //本轮回复链（tool_call/tool/tutor）——auto 群聊行与下课总结行要么在别的文件、要么在该行
+  //之前；生成失败时回复链可能残缺，截断后重发即恢复。busy 锁保证判定到执行间无并发写档。
+  Future<void> _rewriteLastUser(String path, String content) async {
+    final file = File(path);
+    final lines = await file.readAsLines();
+    var idx = -1;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.isEmpty) continue;
+      final row = jsonDecode(line) as Map<String, dynamic>;
+      if (row['type'] == 'message' && row['role'] == 'user') idx = i;
+    }
+    if (idx < 0) throw LlmException('未找到可修改的用户消息');
+    final row = jsonDecode(lines[idx]) as Map<String, dynamic>;
+    row['content'] = content;
+    row['time'] = _now(); //时间锚点更新为编辑时刻（重放头部 [MM-DD HH:mm] 随之）
+    lines[idx] = jsonEncode(row);
+    await file.writeAsString('${lines.sublist(0, idx + 1).join('\n')}\n');
+  }
+
   //social 落档目标：上一课文件尾（群聊讨论段）；不足两课时兜底最新文件
   Future<String> _socialTargetFile(String courseName) async {
     final files = await _storage.listChatFiles(courseName);
@@ -452,11 +474,15 @@ class ThreeTutorService {
   // —— 场景 1/3：交流期发送（问答 / 聊天）——
 
   ///先写后说：用户消息落档 → 拼装 → 调用 → 回应写档。
-  ///返回 (实际发言导师名, 回复全文)；失败抛 LlmException（消息已留档，重试/再发由连续合并消化）。
+  ///edit=true 为修改重发：改写目标文件物理最后一条 user 行（content/time 并截断其后本轮
+  ///回复链，见 _rewriteLastUser）而非追加新行——被改行恰在本次拼装读取的文件内，回复衔接。
+  ///返回 (实际发言导师名, 回复全文)；失败抛 LlmException（消息已留档，重试/再发由连续合并消化；
+  ///修改场景内容已改写留档，重试幂等）。
   Future<(String, String)> sendUserMessage({
     required String courseName,
     required String content,
     required bool social,
+    bool edit = false,
   }) async {
     //入口即占 busy：定位文件/读 meta 等准备期间输入框已锁（页面可能先占通用文案，
     //此处细化），杜绝判定窗口内连发两条导致的并发写同一文件
@@ -476,7 +502,11 @@ class ThreeTutorService {
       final userName = learner['name'] as String? ?? '学习者';
       final phase = social ? 'social' : 'qa';
 
-      await _appendUser(path, userName, content, phase);
+      if (edit) {
+        await _rewriteLastUser(path, content);
+      } else {
+        await _appendUser(path, userName, content, phase);
+      }
 
       final courseDir = await _courseDir(courseName);
       final messages = social
@@ -638,10 +668,13 @@ class ThreeTutorService {
   // —— 场景 2：上课对话（ongoing + 用户消息）——
 
   ///先写后说（phase=teaching）→ 教学全量拼装（无调度指令）→ 流式生成 → 写档。
+  ///edit=true 为修改重发：改写本课文件物理最后一条 user 行并截断其后回复链，不再追加新行
+  ///（meta 非 ongoing 时照常抛异常——ended 后「修改」入口已消失，此处兜底）。
   ///返回 (本课导师名, 回复全文)。
   Future<(String, String)> sendLessonMessage({
     required String courseName,
     required String content,
+    bool edit = false,
   }) async {
     _setBusy(courseName, '正在输入中…'); //入口即占 busy（校验期间锁输入框）
     try {
@@ -658,7 +691,11 @@ class ThreeTutorService {
       final learner = await _storage.loadCourseLearner(courseName);
       final userName = learner['name'] as String? ?? '学习者';
 
-      await _appendUser(path, userName, content, 'teaching');
+      if (edit) {
+        await _rewriteLastUser(path, content);
+      } else {
+        await _appendUser(path, userName, content, 'teaching');
+      }
       final courseDir = await _courseDir(courseName);
       final messages = await _prompts.teaching(
         courseDir: courseDir,
