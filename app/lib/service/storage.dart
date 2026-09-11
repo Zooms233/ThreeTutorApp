@@ -150,16 +150,9 @@ class StorageService {
       await courseDir.create(recursive: true);
       await Directory('${courseDir.path}/CHAT').create(); //课次留档目录
 
-      //拷贝导师档案（平铺）
+      //拷贝导师档案（平铺；与切换导师组共用 _copyTutorGroup）
       final worldDir = await getWorldDir(worldName);
-      for (final entity in worldDir.listSync()) {
-        final fileName = entity.path.split(Platform.pathSeparator).last;
-        if (entity is File &&
-            fileName.startsWith('tutor_') &&
-            fileName.endsWith('.json')) {
-          await entity.copy('${courseDir.path}/$fileName');
-        }
-      }
+      await _copyTutorGroup(worldDir, courseDir);
 
       //学习者档案：创建课程时直接生成（世界不再内置 LEARNER.json）
       await File('${courseDir.path}/LEARNER.json').writeAsString(
@@ -533,6 +526,77 @@ class StorageService {
       tutors.add({'name': data['name'], 'relation': data['relation']});
     }
     return tutors;
+  }
+
+  //复制世界内全部导师档案（tutor_*.json）到课程目录（平铺覆盖；建课与切换共用）
+  //返回复制的文件数（0 = 世界内无导师档案）
+  Future<int> _copyTutorGroup(Directory worldDir, Directory courseDir) async {
+    var copied = 0;
+    for (final entity in worldDir.listSync()) {
+      final fileName = entity.path.split(Platform.pathSeparator).last;
+      if (entity is File &&
+          fileName.startsWith('tutor_') &&
+          fileName.endsWith('.json')) {
+        await entity.copy('${courseDir.path}/$fileName');
+        copied++;
+      }
+    }
+    return copied;
+  }
+
+  //切换导师组：从指定世界重新复制导师档案到课程目录（覆盖旧组，评价从头开始）。
+  //轮换衔接：旧 next_tutor 按名字定位字母位（a/b/c，找不到回退 a）→ 新组同位导师名；
+  //同步写入 STATE.next_tutor 与最新课次 meta.tutor（qa 回复者与开课导师的读取点），
+  //tutor_a→b→c 轮换节奏不变，仅换人。无课次文件（建课未交流）只写 STATE，
+  //第 1 课懒建（getCurrentLesson）时自动带上新名。调用方保证非上课中且无生成任务。
+  //返回 null=成功；返回字符串=失败原因。
+  Future<String?> switchTutorGroup({
+    required String courseName,
+    required String worldName,
+  }) async {
+    final courseDir = await getCourseDir(courseName);
+    if (!courseDir.existsSync()) return '课程不存在';
+    final worldDir = await getWorldDir(worldName);
+    if (!worldDir.existsSync()) return '世界「$worldName」不存在';
+
+    //1. 旧 next_tutor 按名字定位字母位（映射基准；异常情况回退 a）
+    final state = await loadCourseState(courseName);
+    final oldName = state['next_tutor'] as String? ?? '';
+    var slot = 'a';
+    for (final entity in courseDir.listSync()) {
+      final base = entity.path.split(Platform.pathSeparator).last;
+      final m = RegExp(r'^tutor_([abc])\.json$').firstMatch(base);
+      if (entity is File && m != null) {
+        final data =
+            jsonDecode(await entity.readAsString()) as Map<String, dynamic>;
+        if ((data['name'] as String? ?? '') == oldName) slot = m.group(1)!;
+      }
+    }
+
+    //2. 覆盖复制新组档案（评价随之回到世界档案初始版）
+    final copied = await _copyTutorGroup(worldDir, courseDir);
+    if (copied == 0) return '世界「$worldName」内没有导师档案';
+
+    //3. 新组同位导师名 → STATE.next_tutor（同位文件缺失时回退 tutor_a）
+    var slotFile = File('${courseDir.path}/tutor_$slot.json');
+    if (!slotFile.existsSync()) {
+      slotFile = File('${courseDir.path}/tutor_a.json');
+    }
+    var newName = oldName;
+    if (slotFile.existsSync()) {
+      final data =
+          jsonDecode(await slotFile.readAsString()) as Map<String, dynamic>;
+      newName = data['name'] as String? ?? oldName;
+    }
+    state['next_tutor'] = newName;
+    await saveCourseState(courseName, state);
+
+    //4. 有课次文件则同步 meta.tutor（下一课导师与 qa 回复者都以它为准）
+    final files = await listChatFiles(courseName);
+    if (files.isNotEmpty) {
+      await patchChatMeta(files.last, {'tutor': newName});
+    }
+    return null;
   }
 
   //读取课程 STATE.json（单行 JSON；文件不存在返回空 Map）

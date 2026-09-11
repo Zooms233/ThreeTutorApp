@@ -20,6 +20,7 @@ class _RelationPageState extends State<RelationPage> {
   List<Map<String, dynamic>> _relations = []; //导师 name + relation（tutor_a→b→c）
   Map<String, List<String>> _materials = {}; //教学材料：outline/textbook 文件名单
   bool _loading = true;
+  bool _switchLocked = false; //上课中（ongoing）或有生成任务时置灰导师组切换
 
   @override
   void initState() {
@@ -36,11 +37,16 @@ class _RelationPageState extends State<RelationPage> {
     final materials = await StorageService().listCourseMaterials(
       widget.courseName,
     );
+    //切换置灰判定：上课中（含下课流程失败滞留 ongoing）或有生成任务（busy）
+    final meta = await StorageService().loadLatestChatMeta(widget.courseName);
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
       _learner = learner;
       _relations = relations;
       _materials = materials;
+      _switchLocked =
+          (meta != null && meta['status'] == 'ongoing') ||
+          ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty;
       _loading = false;
     });
   }
@@ -445,7 +451,76 @@ class _RelationPageState extends State<RelationPage> {
     );
   }
 
-  //导师评价卡：三位导师对学习者的评价合并一块（导师名 + 评价，行间分隔线）
+  //轻提示（两秒自动消失）
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  //导师组切换：世界选择 → 二次确认 → 覆盖复制新组并同步轮换位（评价从头开始）。
+  //选原世界 = 用世界档案初始版覆盖课程副本，即评价重置；行为对所有世界统一。
+  //置灰（_switchLocked）之外此处兑底复检，防页面停留期间状态变化。
+  Future<void> _showSwitchTutorDialog() async {
+    final meta = await StorageService().loadLatestChatMeta(widget.courseName);
+    if (!mounted) return;
+    if (meta != null && meta['status'] == 'ongoing') {
+      _toast('上课中不能切换导师组');
+      return;
+    }
+    if (ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty) {
+      _toast('有回复生成中，请稍后再试');
+      return;
+    }
+    final worlds = await StorageService().listWorlds();
+    if (!mounted) return;
+    if (worlds.isEmpty) {
+      _toast('暂无可选世界（先在通讯录导入或新建世界）');
+      return;
+    }
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('选择导师组世界'),
+        children: [
+          for (final w in worlds)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, w),
+              child: Text(w, style: const TextStyle(fontSize: 15)),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return; //未选即取消
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('切换到世界「$picked」？'),
+        content: const Text('导师对学习者的评价将从头开始，当前评价不会保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('切换'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return; //取消即不动
+    final error = await StorageService().switchTutorGroup(
+      courseName: widget.courseName,
+      worldName: picked,
+    );
+    if (!mounted) return;
+    _toast(error ?? '已切换，导师评价从头开始');
+    _load(); //重新读档刷新评价卡
+  }
+
+  //导师评价卡：三位导师对学习者的评价合并一块（导师名 + 评价，行间分隔线）；
+  //标题行尾随切换按钮 → 选世界换导师组（评价从头开始），上课中/生成中置灰
   Widget _buildRelationsCard() {
     return Container(
       color: Colors.white,
@@ -454,9 +529,24 @@ class _RelationPageState extends State<RelationPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '导师对学习者的评价',
-            style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+          Row(
+            children: [
+              const Text(
+                '导师对学习者的评价',
+                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: _switchLocked ? null : _showSwitchTutorDialog,
+                child: Icon(
+                  Icons.swap_horiz,
+                  size: 18,
+                  color: _switchLocked
+                      ? const Color(0xFFCCCCCC)
+                      : const Color(0xFF999999),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 4),
           for (var i = 0; i < _relations.length; i++) ...[
