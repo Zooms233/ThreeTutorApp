@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, rootBundle;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:three_tutor/page/usage_page.dart';
 import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
@@ -19,6 +20,7 @@ class TabSetting extends StatefulWidget {
 class _TabSettingState extends State<TabSetting> {
   Map<String, dynamic> _config = {}; //CONFIG.json 内容
   bool _loading = true;
+  String _version = ''; //应用版本（运行时读 pubspec，与 release tag 校验同源）
   final _llm = LlmClient(); //连通性检验用（无状态，直接调协议层 ping）
 
   @override
@@ -30,9 +32,11 @@ class _TabSettingState extends State<TabSetting> {
   //读取配置并刷新
   Future<void> _load() async {
     final config = await StorageService().loadConfig();
+    final info = await PackageInfo.fromPlatform(); //运行时版本号（pubspec version）
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
       _config = config;
+      _version = 'v${info.version}';
       _loading = false;
     });
   }
@@ -52,11 +56,12 @@ class _TabSettingState extends State<TabSetting> {
                 _buildUsageEntry(), //用量统计入口（往期课程 token 消耗）
                 _buildTutorTemplateEntry(), //导师参考提示词（复制模板 → 应用外生成自定义导师组）
                 const SizedBox(height: 32),
-                const Center(
-                  //与 pubspec version 同步（引入 package_info 前先硬编码）
+                Center(
+                  //运行时读 pubspec version（package_info_plus），不再硬编码；
+                  //与 release.yml 的 tag↔pubspec 校验同源，三处版本号单一来源
                   child: Text(
-                    'v1.0.0',
-                    style: TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+                    _version,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
                   ),
                 ),
               ],
