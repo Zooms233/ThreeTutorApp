@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 
 ///用量统计页：现读数据根 USAGE.jsonl 聚合展示（账本文件即唯一事实，每次进入现算不缓存）。
 ///结构 = 顶部总账卡 + 课程分组（ExpansionTile）→ 课次小节 → 单次调用行（时间 场景 入/出/命中）。
@@ -63,7 +64,7 @@ class _UsagePageState extends State<UsagePage> {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFE64340), //红色警示：不可逆操作
+              backgroundColor: AppColors.of(context).dangerSolid, //红色警示：不可逆操作
             ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('清理'),
@@ -102,11 +103,11 @@ class _UsagePageState extends State<UsagePage> {
     if (_rows.isEmpty) {
       return Scaffold(
         appBar: AppBar(title: const Text('用量统计')),
-        body: const Center(
+        body: Center(
           child: Text(
             '暂无用量记录\n上过课或问答后，这里会出现统计',
             textAlign: TextAlign.center,
-            style: TextStyle(color: Color(0xFF999999)),
+            style: TextStyle(color: AppColors.of(context).textSecondary),
           ),
         ),
       );
@@ -162,6 +163,7 @@ class _UsagePageState extends State<UsagePage> {
   //「消耗强度」；悬停仍显示真实 token 数（不做价格换算展示）。
   //档位按非零日四分位自适应（GitHub 同款思路），抗用量增长。
   Widget _buildHeatmap(List<Map<String, dynamic>> rows) {
+    final c = AppColors.of(context); //贡献图 4 档色阶 + 空格色（深浅两套各不同）
     //按日聚合：dayTokens（悬停显示的真实 token 量）与 dayHeat（着色权重）
     final dayTokens = <String, int>{};
     final dayHeat = <String, double>{};
@@ -182,22 +184,22 @@ class _UsagePageState extends State<UsagePage> {
         : heats[(heats.length * p).clamp(0, heats.length - 1).floor()];
     final q1 = q(0.25), q2 = q(0.5), q3 = q(0.75);
     Color colorOf(double heat) {
-      if (heat <= 0) return const Color(0xFFEBEDF0);
-      if (heat <= q1) return const Color(0xFF9BE9A8);
-      if (heat <= q2) return const Color(0xFF40C463);
-      if (heat <= q3) return const Color(0xFF30A14E);
-      return const Color(0xFF216E39);
+      if (heat <= 0) return c.heatEmpty;
+      if (heat <= q1) return c.heatL1;
+      if (heat <= q2) return c.heatL2;
+      if (heat <= q3) return c.heatL3;
+      return c.heatL4;
     }
 
     //窗口：最多 26 周（半年），列数按可用宽度自适应；起点对齐周一
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
       padding: const EdgeInsets.all(12),
       child: LayoutBuilder(
-        builder: (context, c) {
+        builder: (context, constraints) {
           const cell = 11.0, gap = 3.0, labelW = 18.0, monthH = 14.0;
-          final cols = ((c.maxWidth - labelW - 16) / (cell + gap))
+          final cols = ((constraints.maxWidth - labelW - 16) / (cell + gap))
               .floor()
               .clamp(4, 26);
           final now = DateTime.now();
@@ -256,9 +258,9 @@ class _UsagePageState extends State<UsagePage> {
                           alignment: Alignment.centerLeft,
                           child: Text(
                             monthLabel,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 9,
-                              color: Color(0xFF999999),
+                              color: c.textSecondary,
                             ),
                           ),
                         ),
@@ -275,7 +277,7 @@ class _UsagePageState extends State<UsagePage> {
             children: [
               Text(
                 '近半年消耗 ${_fmtTokens(windowTokens)} token',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF666666)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const SizedBox(height: 8),
               Center(
@@ -299,9 +301,9 @@ class _UsagePageState extends State<UsagePage> {
                                 child: [0, 2, 4].contains(i)
                                     ? Text(
                                         ['一', '三', '五'][(i / 2).floor()],
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 9,
-                                          color: Color(0xFF999999),
+                                          color: c.textSecondary,
                                         ),
                                       )
                                     : null,
@@ -331,8 +333,9 @@ class _UsagePageState extends State<UsagePage> {
 
   //总账卡：三列数字 + 口径说明小字
   Widget _totalCard(int prompt, int write, int out, int hit, double rate) {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.all(16),
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Column(
@@ -352,7 +355,7 @@ class _UsagePageState extends State<UsagePage> {
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 '输入 = 写入 $write + 命中 $hit；命中部分约 1/10 计价',
-                style: TextStyle(fontSize: 11, color: Color(0xFFB0B0B0)),
+                style: TextStyle(fontSize: 11, color: c.textTertiary),
               ),
             ),
         ],
@@ -361,6 +364,7 @@ class _UsagePageState extends State<UsagePage> {
   }
 
   Widget _stat(String value, String label, String sub) {
+    final c = AppColors.of(context);
     return Column(
       children: [
         Text(
@@ -370,12 +374,12 @@ class _UsagePageState extends State<UsagePage> {
         const SizedBox(height: 2),
         Text(
           label,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+          style: TextStyle(fontSize: 12, color: c.textSecondary),
         ),
         if (sub.isNotEmpty)
           Text(
             sub,
-            style: const TextStyle(fontSize: 11, color: Color(0xFFB0B0B0)),
+            style: TextStyle(fontSize: 11, color: c.textTertiary),
           ),
       ],
     );
@@ -399,7 +403,7 @@ class _UsagePageState extends State<UsagePage> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
       child: Material(
-        color: Colors.white, //背景由 Material 承担（ExpansionTile 内部是 ListTile，水波纹可见）
+        color: AppColors.of(context).surface, //背景由 Material 承担（ExpansionTile 内部是 ListTile，水波纹可见）
         child: ExpansionTile(
           title: Text(course),
           subtitle: Text(
@@ -415,9 +419,9 @@ class _UsagePageState extends State<UsagePage> {
                   child: Text(
                     //lesson 存的是留档文件名（lesson-003.jsonl），展示去后缀
                     e.key.replaceAll(RegExp(r'\.jsonl$'), ''),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 12,
-                      color: Color(0xFF07C160),
+                      color: AppColors.of(context).accent,
                     ),
                   ),
                 ),
@@ -436,9 +440,9 @@ class _UsagePageState extends State<UsagePage> {
                       Text(
                         '入 ${_num(r, 'input') + _num(r, 'cacheRead')}'
                         '（命中 ${_num(r, 'cacheRead')}）出 ${_num(r, 'output')}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 12,
-                          color: Color(0xFF666666),
+                          color: AppColors.of(context).textFaint,
                         ),
                       ),
                     ],

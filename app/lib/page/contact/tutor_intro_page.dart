@@ -5,6 +5,7 @@ import 'package:three_tutor/page/contact/create_course_page.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 import 'package:three_tutor/page/contact/tutor_profile_page.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 
 //导师资料页：联系人资料样式，从这里进档案、创建课程或进入已有课程群聊
 class TutorIntroPage extends StatefulWidget {
@@ -79,13 +80,14 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
 
     final name = _profile!['name'] as String? ?? '未知导师';
     final identity = _profile!['identity'] as String? ?? '';
+    final c = AppColors.of(context);
 
     return ListView(
       children: [
         //头部：白底块，头像左 + 名字/身份右（资料页头部样式）
         Container(
           width: double.infinity,
-          color: Colors.white,
+          color: c.surface,
           padding: const EdgeInsets.all(16),
           child: Row(
             children: [
@@ -111,9 +113,9 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
                       const SizedBox(height: 6),
                       Text(
                         identity,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: Color(0xFF999999),
+                          color: c.textSecondary,
                         ),
                       ),
                     ],
@@ -150,10 +152,13 @@ class _TutorIntroPageState extends State<TutorIntroPage> {
   //白色行按钮：标题左对齐 + 右侧箭头（资料页行样式）
   Widget _buildRow(String title, {VoidCallback? onTap}) {
     return Material(
-      color: Colors.white, //白底同时是按压水波纹的载体
+      color: AppColors.of(context).surface, //白底同时是按压水波纹的载体
       child: ListTile(
         title: Text(title),
-        trailing: const Icon(Icons.chevron_right, color: Color(0xFFC8C8C8)),
+        trailing: Icon(
+          Icons.chevron_right,
+          color: AppColors.of(context).iconFaint,
+        ),
         onTap: onTap,
       ),
     );

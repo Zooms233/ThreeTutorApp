@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:three_tutor/page/chat/group_chat_page.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 
 //创建课程表单：从导师资料页「创建群聊」进入
 //导师世界由发起的导师决定（不提供选择），完成即建课
@@ -190,8 +191,9 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     String? Function(String?)? validator,
     Widget? trailing,
   }) {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       margin: const EdgeInsets.only(bottom: 8),
       child: Column(
@@ -199,7 +201,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
         children: [
           Row(
             children: [
-              Text(label, style: const TextStyle(fontSize: 13, color: Color(0xFF808080))),
+              Text(label, style: TextStyle(fontSize: 13, color: c.textFaint)),
               if (trailing != null) ...[const Spacer(), trailing],
             ],
           ),
@@ -209,7 +211,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
             style: const TextStyle(fontSize: 16),
             decoration: InputDecoration(
               hintText: hint,
-              hintStyle: const TextStyle(fontSize: 15, color: Color(0xFFB0B0B0)),
+              hintStyle: TextStyle(fontSize: 15, color: c.textTertiary),
               border: InputBorder.none,
             ),
             validator: validator,
@@ -221,15 +223,16 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
 
   //教学大纲行（仅一份）：标签 + 已选文件名（点按清除）或「选择文件」按钮
   Widget _buildSyllabusRow() {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       margin: const EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          const Text(
+          Text(
             '教学大纲（可选）',
-            style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+            style: TextStyle(fontSize: 13, color: c.textFaint),
           ),
           const Spacer(),
           if (_syllabusPath != null)
@@ -237,7 +240,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
               onTap: () => setState(() => _syllabusPath = null),
               child: Text(
                 _fileNameOf(_syllabusPath!),
-                style: const TextStyle(fontSize: 14, color: Color(0xFF07C160)),
+                style: TextStyle(fontSize: 14, color: c.accent),
                 overflow: TextOverflow.ellipsis,
               ),
             )
@@ -253,8 +256,9 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
 
   //教学材料行（可多份）：标签 + 已选文件列表（点按移除）或「选择文件」按钮
   Widget _buildTextbooksRow() {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       margin: const EdgeInsets.only(bottom: 8),
       child: Column(
@@ -262,9 +266,9 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '教学材料（可选，可多份）',
-                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
               TextButton(
@@ -281,9 +285,9 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
                   Expanded(
                     child: Text(
                       _fileNameOf(path),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
-                        color: Color(0xFF07C160),
+                        color: c.accent,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -292,10 +296,10 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
                   GestureDetector(
                     onTap: () =>
                         setState(() => _textbookPaths.remove(path)),
-                    child: const Icon(
+                    child: Icon(
                       Icons.delete_outline,
                       size: 18,
-                      color: Color(0xFF999999),
+                      color: c.textSecondary,
                     ),
                   ),
                 ],

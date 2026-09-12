@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:three_tutor/page/chat/relation_page.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 
 //课程详情页：状态四项 + 知识点进度 + 关系入口（原课程信息页与课程进度页合并）
 class CourseDetailPage extends StatefulWidget {
@@ -79,8 +80,8 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
                   : (_meta?['status'] == 'ongoing' ? '今天就到这里' : '开始上课'),
               style: TextStyle(
                 color: _courseBusy
-                    ? const Color(0xFFB0B0B0)
-                    : const Color(0xFF07C160),
+                    ? AppColors.of(context).textTertiary
+                    : AppColors.of(context).accent,
               ),
             ),
           ),
@@ -106,7 +107,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     final lastDate = _state['last_date'] as String? ?? '';
 
     return Container(
-      color: Colors.white,
+      color: AppColors.of(context).surface,
       margin: const EdgeInsets.only(bottom: 8),
       child: Column(
         children: [
@@ -121,16 +122,17 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
 
   //状态行：灰色标签左 + 值右
   Widget _buildStateRow(String label, String value) {
+    final c = AppColors.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
           Text(
             label,
-            style: const TextStyle(fontSize: 14, color: Color(0xFF999999)),
+            style: TextStyle(fontSize: 14, color: c.textSecondary),
           ),
           const Spacer(),
-          Text(value, style: const TextStyle(fontSize: 14, color: Color(0xFF191919))),
+          Text(value, style: TextStyle(fontSize: 14, color: c.textPrimary)),
         ],
       ),
     );
@@ -139,13 +141,16 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   //课程资料入口（学习者信息/教学大纲与材料/导师关系）→ 课程资料页
   Widget _buildRelationRow() {
     return Container(
-      color: Colors.white,
+      color: AppColors.of(context).surface,
       margin: const EdgeInsets.only(bottom: 8),
       child: Material(
         color: Colors.transparent, //ListTile 自己的 Material：水波纹不被白底 ColoredBox 吞（Flutter 断言）
         child: ListTile(
           title: const Text('课程资料'),
-          trailing: const Icon(Icons.chevron_right, color: Color(0xFFC8C8C8)),
+          trailing: Icon(
+            Icons.chevron_right,
+            color: AppColors.of(context).iconFaint,
+          ),
           onTap: () {
             Navigator.push(
               context,
@@ -168,14 +173,17 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
         child: Center(
           child: Text(
             '暂无学习进度，完成第一节课后自动生成',
-            style: const TextStyle(fontSize: 14, color: Color(0xFF999999)),
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.of(context).textSecondary,
+            ),
           ),
         ),
       );
     }
 
     return Container(
-      color: Colors.white,
+      color: AppColors.of(context).surface,
       child: Column(
         children: [
           for (var i = 0; i < _progress.length; i++)
@@ -194,6 +202,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
 
     final latest = records.last;
     final expanded = _expanded.contains(index);
+    final c = AppColors.of(context);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -215,21 +224,21 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
               children: [
                 Text(
                   '${latest['status']} $name',
-                  style: const TextStyle(fontSize: 15, color: Color(0xFF191919)),
+                  style: TextStyle(fontSize: 15, color: c.textPrimary),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   '最近 ${latest['date'] ?? ''} → 复习 ${latest['review'] ?? ''}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                  style: TextStyle(fontSize: 12, color: c.textSecondary),
                 ),
                 if (_hasMistake(latest))
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       '【${latest['mistake']}】',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFFFA5151),
+                        color: c.danger,
                       ),
                     ),
                   ),
@@ -247,14 +256,14 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
                 children: [
                   Text(
                     '${records[j]['status']} ${records[j]['date'] ?? ''} → 复习 ${records[j]['review'] ?? ''}',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                    style: TextStyle(fontSize: 12, color: c.textSecondary),
                   ),
                   if (_hasMistake(records[j]))
                     Text(
                       '【${records[j]['mistake']}】',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFFFA5151),
+                        color: c.danger,
                       ),
                     ),
                 ],

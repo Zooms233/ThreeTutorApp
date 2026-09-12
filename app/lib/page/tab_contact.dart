@@ -3,6 +3,7 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:three_tutor/page/contact/tutor_intro_page.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 class TabContact extends StatefulWidget {
@@ -254,7 +255,9 @@ class _TabContactState extends State<TabContact> {
             child: const Text('取消'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.of(context).danger,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('删除'),
           ),
@@ -307,13 +310,14 @@ class _TabContactState extends State<TabContact> {
 
     //空状态：提示待导入，并提供导入入口
     if (_worldTutors.isEmpty) {
+      final c = AppColors.of(context);
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min, //只占内容大小，才能被外层 Center 居中（默认 max 会撑满全屏）
           children: [
-            Icon(Icons.public, size: 64, color: Colors.grey.shade400),
+            Icon(Icons.public, size: 64, color: c.iconFaint),
             const SizedBox(height: 12),
-            Text('待导入', style: TextStyle(fontSize: 18, color: Colors.grey.shade600)),
+            Text('待导入', style: TextStyle(fontSize: 18, color: c.textFaint)),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: _importBuiltin,
@@ -349,7 +353,10 @@ class _TabContactState extends State<TabContact> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: Text(
           world,
-          style: const TextStyle(fontSize: 13, color: Color(0xFF808080)),
+          style: TextStyle(
+            fontSize: 13,
+            color: AppColors.of(context).textFaint,
+          ),
         ),
       ),
     );
@@ -360,7 +367,7 @@ class _TabContactState extends State<TabContact> {
   //分割线从头像右侧起（16+40+16=72），细线风格
   Widget _buildTutorRow(String world, Map<String, dynamic> tutor) {
     return Material(
-      color: Colors.white,
+      color: AppColors.of(context).surface,
       child: Column(
         children: [
           ListTile(

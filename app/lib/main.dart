@@ -6,12 +6,31 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:three_tutor/page/tab_chat.dart';
 import 'package:three_tutor/page/tab_contact.dart';
 import 'package:three_tutor/page/tab_setting.dart';
+import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/theme/app_colors.dart';
+import 'package:three_tutor/theme/app_theme.dart';
 
 Future<void> main() async {
   //在 await 之前初始化绑定（Android 权限申请用到了平台通道）
   WidgetsFlutterBinding.ensureInitialized();
   await _ensureStoragePermission();
+  await _restoreThemeMode(); //恢复用户主题偏好（明亮/深色/自动），失败静默用默认
   runApp(const MyApp());
+}
+
+//从 CONFIG.json 恢复主题模式；无字段/读取失败时保持默认（跟随系统）
+Future<void> _restoreThemeMode() async {
+  try {
+    final config = await StorageService().loadConfig();
+    final saved = config['themeMode'] as String?;
+    if (saved == null) return;
+    themeModeNotifier.value = ThemeMode.values.firstWhere(
+      (m) => m.name == saved,
+      orElse: () => ThemeMode.system,
+    );
+  } catch (_) {
+    //读取失败不影响启动
+  }
 }
 
 //Android 上申请「所有文件访问」权限：数据存放在公共 Documents/ThreeTutor
@@ -36,43 +55,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: '三人师',
-      debugShowCheckedModeBanner:
-          false, //隐藏右上角 DEBUG 横幅（仅 debug 运行时显示，release 本来就没有）
-      theme: ThemeData(
-        //fontFamily：思源黑体（内置 assets/fonts，Regular + Bold）；LaTeX 公式同步该字号与字距
-        fontFamily: 'SourceHanSansCN',
-        //绿 #07C160 作为种子色：全局强调色（按钮、水波纹、选中态）
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF07C160)),
-        //浅色模式基础底色：页面与顶栏同为浅灰，列表内容用白色行浮起
-        scaffoldBackgroundColor: const Color(0xFFEDEDED),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFEDEDED),
-          scrolledUnderElevation: 0, //列表滚动时顶栏不因 surfaceTint 变色
-        ),
-        //全局分割线：极细线风格
-        dividerTheme: const DividerThemeData(
-          color: Color(0xFFE5E5E5),
-          thickness: 0.5,
-        ),
-        //底部导航栏：白底 + 选中绿 / 未选中灰
-        navigationBarTheme: NavigationBarThemeData(
-          backgroundColor: Colors.white,
-          indicatorColor: const Color(0x1A07C160), //绿 10% 透明度的选中胶囊
-          iconTheme: WidgetStateProperty.resolveWith((states) {
-            return states.contains(WidgetState.selected)
-                ? const IconThemeData(color: Color(0xFF07C160))
-                : const IconThemeData(color: Color(0xFF999999));
-          }),
-          labelTextStyle: WidgetStateProperty.resolveWith((states) {
-            return states.contains(WidgetState.selected)
-                ? const TextStyle(fontSize: 12, color: Color(0xFF07C160))
-                : const TextStyle(fontSize: 12, color: Color(0xFF999999));
-          }),
-        ),
+    //监听全局主题模式：设置页切换即重建整树（MaterialApp 换 themeMode）
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeModeNotifier,
+      builder: (context, mode, _) => MaterialApp(
+        title: '三人师',
+        debugShowCheckedModeBanner:
+            false, //隐藏右上角 DEBUG 横幅（仅 debug 运行时显示，release 本来就没有）
+        theme: buildLightTheme(),
+        darkTheme: buildDarkTheme(),
+        themeMode: mode, //light=明亮 / dark=深色 / system=跟随系统（Android 深色开关）
+        home: const HomePage(),
       ),
-      home: const HomePage(),
     );
   }
 }
@@ -100,10 +94,13 @@ class _HomePageState extends State<HomePage> {
       builder: (_, pageIndex, _) => Scaffold(
         body: IndexedStack(index: pageIndex, children: pages),
         bottomNavigationBar: DecoratedBox(
-          //顶部细分割线，贴合经典聊天应用底部栏样式
-          decoration: const BoxDecoration(
+          //顶部细分割线，贴合经典聊天应用底部栏样式（颜色随主题）
+          decoration: BoxDecoration(
             border: Border(
-              top: BorderSide(color: Color(0xFFE5E5E5), width: 0.5),
+              top: BorderSide(
+                color: AppColors.of(context).divider,
+                width: 0.5,
+              ),
             ),
           ),
           child: NavigationBar(

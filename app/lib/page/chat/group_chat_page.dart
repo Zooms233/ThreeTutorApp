@@ -16,6 +16,7 @@ import 'package:three_tutor/page/chat/course_detail_page.dart';
 import 'package:three_tutor/service/llm_client.dart' show LlmException;
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 import 'package:three_tutor/widget/chat_card.dart'
     show ChatCardView, normalizeItalic;
 import 'package:three_tutor/widget/tutor_avatar.dart';
@@ -828,8 +829,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     ? '课后交流：群聊讨论（点此切回问答）'
                     : '课后交流：问答（点此切为群聊讨论）',
                 color: _socialMode
-                    ? const Color(0xFF07C160)
-                    : const Color(0xFF999999),
+                    ? AppColors.of(context).accent
+                    : AppColors.of(context).textSecondary,
                 onPressed: () => setState(() => _socialMode = !_socialMode),
               ),
             //重新生成群聊按钮已注释（调试入口，见 doc/05-调试.md）
@@ -912,7 +913,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //系统分隔行：两侧细线 + 居中小字（课次分隔 / 下课后 / 加入群聊 / 没有更多了）
   //带 linkPath 的行（翻书行）：linkText 部分染链接蓝可点，点击用外部应用打开材料文件
   Widget _buildDivider(_ChatItem item) {
-    const grey = TextStyle(fontSize: 12, color: Color(0xFFB0B0B0));
+    final c = AppColors.of(context);
+    final grey = TextStyle(fontSize: 12, color: c.textTertiary);
     final link = item.linkPath;
     final Widget center;
     if (link != null && item.linkText != null) {
@@ -929,7 +931,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
               TextSpan(text: head),
               TextSpan(
                 text: item.linkText!,
-                style: const TextStyle(color: Color(0xFF576B95)), //链接蓝
+                style: TextStyle(color: c.link), //链接蓝
               ),
             ],
           ),
@@ -950,7 +952,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       child: LayoutBuilder(
         builder: (context, constraints) => Row(
           children: [
-            const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+            Expanded(child: Divider(color: c.divider)),
             //中间按内容宽（短文本时两侧平分 → 居中）；长文本限宽截断不撑破
             ConstrainedBox(
               constraints: BoxConstraints(maxWidth: constraints.maxWidth * 0.6),
@@ -959,7 +961,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                 child: center,
               ),
             ),
-            const Expanded(child: Divider(color: Color(0xFFDCDCDC))),
+            Expanded(child: Divider(color: c.divider)),
           ],
         ),
       ),
@@ -1134,6 +1136,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   //导师消息：头像 + 名字 + 白色气泡，左对齐；气泡最大宽度约屏宽 72%
   Widget _buildTutorMessage(String name, String content) {
+    final c = AppColors.of(context);
     final maxWidth = MediaQuery.sizeOf(context).width * 0.72;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
@@ -1152,7 +1155,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
             children: [
               Text(
                 name,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                style: TextStyle(fontSize: 12, color: c.textSecondary),
               ),
               const SizedBox(height: 2),
               Container(
@@ -1161,9 +1164,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   horizontal: 14,
                   vertical: 10,
                 ),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.only(
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(12),
                     topRight: Radius.circular(12),
                     bottomLeft: Radius.circular(4), //靠头像侧小圆角（气泡细节）
@@ -1176,11 +1179,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   useDollarSignsForLatex:
                       true, //$...$ 与 $$...$$ 定界的 LaTeX 需显式开启（默认只认 \(...\)/\[...\]）
                   //行内公式与正文同字号；块公式超宽时横向滚动，避免溢出气泡
-                  styleSheet: const GptMarkdownStyleSheet(
-                    latex: LatexStyle(
+                  styleSheet: GptMarkdownStyleSheet(
+                    latex: const LatexStyle(
                       textStyle: TextStyle(fontSize: 15),
                       scrollBlockHorizontally: true,
                     ),
+                    link: LinkStyle(color: c.link), //链接色随主题（深浅两套）
                   ),
                 ),
               ),
@@ -1193,6 +1197,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
 
   //用户消息：绿色气泡（绿 #95EC69）+ 头像，右对齐；群聊里自己消息不显示名字
   Widget _buildUserMessage(String name, String content) {
+    final c = AppColors.of(context);
     final maxWidth = MediaQuery.sizeOf(context).width * 0.72;
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
@@ -1204,9 +1209,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
             child: Container(
               constraints: BoxConstraints(maxWidth: maxWidth),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: const BoxDecoration(
-                color: Color(0xFF95EC69),
-                borderRadius: BorderRadius.only(
+              decoration: BoxDecoration(
+                color: c.userBubble,
+                borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(12),
                   topRight: Radius.circular(12),
                   bottomLeft: Radius.circular(12),
@@ -1215,13 +1220,14 @@ class _GroupChatPageState extends State<GroupChatPage> {
               ),
               child: GptMarkdown(
                 normalizeItalic(content),
-                style: const TextStyle(fontSize: 15, height: 1.4),
+                style: TextStyle(fontSize: 15, height: 1.4, color: c.userBubbleText),
                 useDollarSignsForLatex: true,
-                styleSheet: const GptMarkdownStyleSheet(
-                  latex: LatexStyle(
+                styleSheet: GptMarkdownStyleSheet(
+                  latex: const LatexStyle(
                     textStyle: TextStyle(fontSize: 15),
                     scrollBlockHorizontally: true,
                   ),
+                  link: LinkStyle(color: c.link), //链接色随主题（深浅两套）
                 ),
               ),
             ),
@@ -1236,8 +1242,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //输入条：输入可用（发送按钮随内容与发送状态启停）；
   //修改模式时顶部显示提示条（发送即替换原消息，× 退出修改模式）
   Widget _buildInputBar() {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: Column(
         children: [
@@ -1246,25 +1253,25 @@ class _GroupChatPageState extends State<GroupChatPage> {
               margin: const EdgeInsets.only(bottom: 6),
               padding: const EdgeInsets.fromLTRB(10, 4, 6, 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFF2F2F2),
+                color: c.editBarBg,
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '正在修改，发送后替换原消息并重新生成回复',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                      style: TextStyle(fontSize: 12, color: c.textSecondary),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   GestureDetector(
                     onTap: _cancelEdit,
-                    child: const Icon(
+                    child: Icon(
                       Icons.cancel,
                       size: 16,
-                      color: Color(0xFF999999),
+                      color: c.textSecondary,
                     ),
                   ),
                 ],
@@ -1304,8 +1311,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     ),
                     style: IconButton.styleFrom(
                       backgroundColor: canSend
-                          ? const Color(0xFF07C160)
-                          : const Color(0xFFD8D8D8),
+                          ? c.accentSolid
+                          : c.disabledSurface,
                       minimumSize: const Size(40, 40),
                     ),
                   );

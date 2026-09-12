@@ -8,6 +8,8 @@ import 'package:three_tutor/page/usage_page.dart';
 import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/theme/app_colors.dart';
+import 'package:three_tutor/theme/app_theme.dart';
 
 //设置页：API 配置
 class TabSetting extends StatefulWidget {
@@ -35,6 +37,11 @@ class _TabSettingState extends State<TabSetting> {
     final info = await PackageInfo.fromPlatform(); //运行时版本号（pubspec version）
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
+      //加载期间用户可能已切过主题（_setThemeMode 已写盘并更新内存）：
+      //磁盘读回的结果若缺 themeMode，保留内存值，避免覆盖丢失
+      if (config['themeMode'] == null && _config['themeMode'] != null) {
+        config['themeMode'] = _config['themeMode'];
+      }
       _config = config;
       _version = 'v${info.version}';
       _loading = false;
@@ -47,6 +54,26 @@ class _TabSettingState extends State<TabSetting> {
       appBar: AppBar(
         title: const Text('设置'),
         //API 配置唯一入口 = 下方摘要卡（未配置时显示引导文案，同样可点进配置）
+        actions: [
+          //外观切换：明亮 / 深色 / 自动（跟随系统），选择即生效并落盘 CONFIG.json
+          PopupMenuButton<ThemeMode>(
+            icon: Icon(switch (themeModeNotifier.value) {
+              ThemeMode.light => Icons.light_mode_outlined,
+              ThemeMode.dark => Icons.dark_mode_outlined,
+              ThemeMode.system => Icons.brightness_6_outlined,
+            }),
+            tooltip: '外观',
+            onSelected: _setThemeMode,
+            itemBuilder: (context) => [
+              for (final m in ThemeMode.values)
+                CheckedPopupMenuItem(
+                  value: m,
+                  checked: themeModeNotifier.value == m,
+                  child: Text(_themeModeLabel(m)),
+                ),
+            ],
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -61,12 +88,35 @@ class _TabSettingState extends State<TabSetting> {
                   //与 release.yml 的 tag↔pubspec 校验同源，三处版本号单一来源
                   child: Text(
                     _version,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.of(context).textTertiary,
+                    ),
                   ),
                 ),
               ],
             ),
     );
+  }
+
+  //主题模式中文名（切换菜单展示）
+  String _themeModeLabel(ThemeMode m) => switch (m) {
+    ThemeMode.light => '明亮',
+    ThemeMode.dark => '深色',
+    ThemeMode.system => '自动（跟随系统）',
+  };
+
+  //切换主题模式：全局通知重建 + 写入 CONFIG.json（下次启动恢复）
+  //先读磁盘最新配置再合并写入：切换按钮在加载完成前即可点击，
+  //直接改内存 _config 可能覆盖掉尚未加载的 profiles/active
+  Future<void> _setThemeMode(ThemeMode mode) async {
+    if (themeModeNotifier.value == mode) return;
+    themeModeNotifier.value = mode;
+    final config = await StorageService().loadConfig();
+    config['themeMode'] = mode.name; //light / dark / system
+    await StorageService().saveConfig(config);
+    if (!mounted) return;
+    setState(() => _config = config); //内存同步：后续 API 配置保存基于最新配置
   }
 
   //内置服务商表：DeepSeek 官方（接口+模型内置，实测可用组合，只填 Key）；OpenAI 兼容自填
@@ -104,13 +154,14 @@ class _TabSettingState extends State<TabSetting> {
   //当前 API 配置摘要卡：使用中档的 名称/模型/Key 遮显；点击进入配置对话框
   Widget _buildApiSummary() {
     if (_loading) return const SizedBox.shrink();
+    final c = AppColors.of(context);
     final activeId = _activeId;
     final matched = _profiles.where((p) => p['id'] == activeId).toList();
     if (matched.isEmpty) {
       return Container(
         margin: const EdgeInsets.all(16),
         child: Material(
-          color: Colors.white,
+          color: c.surface,
           child: ListTile(
             leading: const Icon(Icons.vpn_key_outlined),
             title: const Text('API 未配置'),
@@ -125,8 +176,7 @@ class _TabSettingState extends State<TabSetting> {
     return Container(
       margin: const EdgeInsets.all(16),
       child: Material(
-        color:
-            Colors.white, //背景由 Material 承担，ListTile 水波纹可见（避免 ColoredBox 遮盖断言）
+        color: c.surface, //背景由 Material 承担，ListTile 水波纹可见（避免 ColoredBox 遮盖断言）
         child: ListTile(
           leading: const Icon(Icons.vpn_key_outlined),
           title: Text(p['name'] as String),
@@ -146,7 +196,7 @@ class _TabSettingState extends State<TabSetting> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: Material(
-        color: Colors.white, //同上：水波纹可见
+        color: AppColors.of(context).surface, //同上：水波纹可见
         child: ListTile(
           leading: const Icon(Icons.insights_outlined),
           title: const Text('用量统计'),
@@ -166,7 +216,7 @@ class _TabSettingState extends State<TabSetting> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: Material(
-        color: Colors.white, //同上：水波纹可见
+        color: AppColors.of(context).surface, //同上：水波纹可见
         child: ListTile(
           leading: const Icon(Icons.school_outlined),
           title: const Text('导师参考提示词'),
@@ -260,7 +310,7 @@ class _TabSettingState extends State<TabSetting> {
                           ? Icons.radio_button_checked
                           : Icons.radio_button_unchecked,
                       size: 20,
-                      color: const Color(0xFF07C160),
+                      color: AppColors.of(context).accent,
                     ),
                     title: Text(p['name'] as String? ?? '配置'),
                     subtitle: Text(
@@ -321,11 +371,14 @@ class _TabSettingState extends State<TabSetting> {
                     ),
                   ),
                 if (profiles.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
                       '尚未保存配置，点击「添加配置」',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.of(context).textSecondary,
+                      ),
                     ),
                   ),
                 Align(
@@ -339,10 +392,7 @@ class _TabSettingState extends State<TabSetting> {
                       );
                       if (added == null) return;
                       setDialogState(() {
-                        profiles = <Map<String, dynamic>>[
-                          ...profiles,
-                          added,
-                        ];
+                        profiles = <Map<String, dynamic>>[...profiles, added];
                         active = added['id'] as String; //新档即选中：检验/保存直接生效
                       });
                     },
@@ -359,8 +409,8 @@ class _TabSettingState extends State<TabSetting> {
                       style: TextStyle(
                         fontSize: 12,
                         color: (testOk ?? false)
-                            ? const Color(0xFF07C160)
-                            : const Color(0xFFE64340),
+                            ? AppColors.of(context).accent
+                            : AppColors.of(context).danger,
                       ),
                     ),
                   ),
@@ -420,14 +470,13 @@ class _TabSettingState extends State<TabSetting> {
     if (saved != true || !mounted) return; //用户取消，全部改动丢弃
 
     //落盘：顶层仅 active（激活档 id，null = 无激活配置），不再冗余镜像选中档三字段；
-    //Key 混淆后写入（防公共目录下明文扫描）；空 profiles 也允许保存 = 无 API 配置状态
+    //Key 混淆后写入（防公共目录下明文扫描）；空 profiles 也允许保存 = 无 API 配置状态；
+    //保留其它顶层字段（themeMode 等外观配置，不能随 API 保存丢失）
     final next = {
+      ..._config,
       'profiles': [
         for (final q in profiles)
-          {
-            ...q,
-            'apiKey': obfuscateKey(q['apiKey'] as String? ?? ''),
-          },
+          {...q, 'apiKey': obfuscateKey(q['apiKey'] as String? ?? '')},
       ],
       'active': active,
     };
@@ -436,9 +485,7 @@ class _TabSettingState extends State<TabSetting> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          profiles.isEmpty ? '已保存（当前无 API 配置）' : 'API 配置已保存',
-        ),
+        content: Text(profiles.isEmpty ? '已保存（当前无 API 配置）' : 'API 配置已保存'),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -459,7 +506,7 @@ class _TabSettingState extends State<TabSetting> {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFFE64340), //红色警示：不可逆操作
+              backgroundColor: AppColors.of(context).dangerSolid, //红色警示：不可逆操作
             ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('删除'),
@@ -530,9 +577,9 @@ class _TabSettingState extends State<TabSetting> {
                     padding: const EdgeInsets.only(top: 4, bottom: 4),
                     child: Text(
                       '接口 ${_providers['deepseek']!.$2}（内置）',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF999999),
+                        color: AppColors.of(context).textSecondary,
                       ),
                     ),
                   )
@@ -600,8 +647,8 @@ class _TabSettingState extends State<TabSetting> {
                       style: TextStyle(
                         fontSize: 12,
                         color: (testOk ?? false)
-                            ? const Color(0xFF07C160)
-                            : const Color(0xFFE64340),
+                            ? AppColors.of(context).accent
+                            : AppColors.of(context).danger,
                       ),
                     ),
                   ),

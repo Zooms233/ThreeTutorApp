@@ -63,7 +63,12 @@ class ChatCardView extends StatelessWidget {
           children: [
             Text(
               courseName,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              //导出图固定浅色风格：显式指定文字色，不随应用主题（防深色下白底浅字）
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF191919),
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -220,16 +225,18 @@ class ChatCardView extends StatelessWidget {
   }
 
   //消息正文：GptMarkdown 渲染（与聊天页一致：斜体规范化 + $...$ LaTeX）
+  //导出图固定浅色风格：文字色与链接色显式指定，不随应用主题
   Widget _content(String content) {
     return GptMarkdown(
       normalizeItalic(content),
-      style: const TextStyle(fontSize: 13, height: 1.4),
+      style: const TextStyle(fontSize: 13, height: 1.4, color: Color(0xFF191919)),
       useDollarSignsForLatex: true,
       styleSheet: const GptMarkdownStyleSheet(
         latex: LatexStyle(
           textStyle: TextStyle(fontSize: 13),
           scrollBlockHorizontally: false, //静态长图无滚动：块公式按宽度折行/收缩
         ),
+        link: LinkStyle(color: Color(0xFF576B95)), //固定链接蓝
       ),
     );
   }

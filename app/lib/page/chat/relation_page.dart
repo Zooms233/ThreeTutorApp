@@ -2,6 +2,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 
 //课程资料页（原关系页）：学习者信息 + 教学大纲/材料管理 + 导师关系
 //建课字段的建后管理入口：学习者（称呼/动力/其他）与大纲/材料均与建课表单一致；
@@ -140,8 +141,9 @@ class _RelationPageState extends State<RelationPage> {
   Widget _buildSyllabusCard() {
     final names = _materials['outline'] ?? const [];
     final current = names.isEmpty ? null : names.first;
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -149,9 +151,9 @@ class _RelationPageState extends State<RelationPage> {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '教学大纲',
-                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
               TextButton(
@@ -162,12 +164,12 @@ class _RelationPageState extends State<RelationPage> {
           ),
           Text(
             current ?? '未设置（教学相长模式：师生共同商定学习方向）',
-            style: const TextStyle(fontSize: 14, color: Color(0xFF191919)),
+            style: TextStyle(fontSize: 14, color: c.textPrimary),
           ),
           const SizedBox(height: 4),
-          const Text(
+          Text(
             '大纲定义教学范围，有则按大纲推进；文本文件（md/txt）',
-            style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+            style: TextStyle(fontSize: 12, color: c.textSecondary),
           ),
         ],
       ),
@@ -177,8 +179,9 @@ class _RelationPageState extends State<RelationPage> {
   //教学材料卡：多文件列表，可删除（二次确认）与添加
   Widget _buildTextbookCard() {
     final names = _materials['textbook'] ?? const [];
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Column(
@@ -186,9 +189,9 @@ class _RelationPageState extends State<RelationPage> {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '教学材料',
-                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
               TextButton(
@@ -198,11 +201,11 @@ class _RelationPageState extends State<RelationPage> {
             ],
           ),
           if (names.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Text(
                 '未添加（参考资料，AI 按需查阅；文本文件 md/txt）',
-                style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                style: TextStyle(fontSize: 12, color: c.textSecondary),
               ),
             )
           else
@@ -214,19 +217,19 @@ class _RelationPageState extends State<RelationPage> {
                     Expanded(
                       child: Text(
                         name,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: Color(0xFF191919),
+                          color: c.textPrimary,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     GestureDetector(
                       onTap: () => _confirmDelete('TEXTBOOK', name),
-                      child: const Icon(
+                      child: Icon(
                         Icons.delete_outline,
                         size: 18,
-                        color: Color(0xFF999999),
+                        color: c.textSecondary,
                       ),
                     ),
                   ],
@@ -243,9 +246,10 @@ class _RelationPageState extends State<RelationPage> {
     final name = _learner['name'] as String? ?? '';
     final motivation = _learner['motivation'] as String? ?? '';
     final extra = _learner['extra'] as String? ?? '';
+    final c = AppColors.of(context);
 
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -253,17 +257,17 @@ class _RelationPageState extends State<RelationPage> {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '学习者',
-                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
               GestureDetector(
                 onTap: _showLearnerEditDialog,
-                child: const Icon(
+                child: Icon(
                   Icons.edit_outlined,
                   size: 18,
-                  color: Color(0xFF999999),
+                  color: c.textSecondary,
                 ),
               ),
             ],
@@ -424,6 +428,7 @@ class _RelationPageState extends State<RelationPage> {
 
   //信息行：灰色标签固定宽 + 正文（长文本换行对齐）
   Widget _buildInfoLine(String label, String value) {
+    final c = AppColors.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -433,16 +438,16 @@ class _RelationPageState extends State<RelationPage> {
             width: 72,
             child: Text(
               label,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF999999)),
+              style: TextStyle(fontSize: 14, color: c.textSecondary),
             ),
           ),
           Expanded(
             child: Text(
               value.isEmpty ? '—' : value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 height: 1.4,
-                color: Color(0xFF191919),
+                color: c.textPrimary,
               ),
             ),
           ),
@@ -522,8 +527,9 @@ class _RelationPageState extends State<RelationPage> {
   //导师评价卡：三位导师对学习者的评价合并一块（导师名 + 评价，行间分隔线）；
   //标题行尾随切换按钮 → 选世界换导师组（评价从头开始），上课中/生成中置灰
   Widget _buildRelationsCard() {
+    final c = AppColors.of(context);
     return Container(
-      color: Colors.white,
+      color: c.surface,
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -531,9 +537,9 @@ class _RelationPageState extends State<RelationPage> {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 '导师对学习者的评价',
-                style: TextStyle(fontSize: 13, color: Color(0xFF808080)),
+                style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
               GestureDetector(
@@ -541,9 +547,7 @@ class _RelationPageState extends State<RelationPage> {
                 child: Icon(
                   Icons.swap_horiz,
                   size: 18,
-                  color: _switchLocked
-                      ? const Color(0xFFCCCCCC)
-                      : const Color(0xFF999999),
+                  color: _switchLocked ? c.iconFaint : c.textSecondary,
                 ),
               ),
             ],
@@ -553,10 +557,10 @@ class _RelationPageState extends State<RelationPage> {
             if (i > 0) const Divider(height: 24),
             Text(
               _relations[i]['name'] as String? ?? '',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF191919),
+                color: c.textPrimary,
               ),
             ),
             const SizedBox(height: 4),
@@ -564,10 +568,10 @@ class _RelationPageState extends State<RelationPage> {
               (_relations[i]['relation'] as String? ?? '').isEmpty
                   ? '尚未建立评价记录'
                   : _relations[i]['relation'] as String,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 height: 1.5,
-                color: Color(0xFF191919),
+                color: c.textPrimary,
               ),
             ),
           ],

@@ -4,6 +4,7 @@ import 'package:three_tutor/main.dart';
 import 'package:three_tutor/page/chat/group_chat_page.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
+import 'package:three_tutor/theme/app_colors.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 //聊天页 = 会话列表：每行一个课程群聊（会话列表样式）
@@ -92,15 +93,16 @@ class _TabChatState extends State<TabChat> {
 
     //空状态：引导去通讯录建课
     if (_conversations.isEmpty) {
+      final c = AppColors.of(context);
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min, //只占内容大小，才能被外层 Center 居中
           children: [
-            Icon(Icons.forum, size: 64, color: Colors.grey.shade400),
+            Icon(Icons.forum, size: 64, color: c.iconFaint),
             const SizedBox(height: 12),
             Text(
               '前往通讯录，选择导师创建群聊',
-              style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
+              style: TextStyle(fontSize: 16, color: c.textFaint),
             ),
           ],
         ),
@@ -128,7 +130,7 @@ class _TabChatState extends State<TabChat> {
     final timeText = date.isEmpty ? '' : date.substring(5);
 
     return Material(
-      color: Colors.white, //白底同时是按压水波纹的载体
+      color: AppColors.of(context).surface, //白底同时是按压水波纹的载体
       child: InkWell(
         onTap: () async {
           //从群聊页返回即刷新列表：预览/排序跟随最新落档（群聊页内生成的新消息）
@@ -154,7 +156,10 @@ class _TabChatState extends State<TabChat> {
                   children: [
                     Text(
                       name,
-                      style: const TextStyle(fontSize: 16, color: Color(0xFF191919)),
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: AppColors.of(context).textPrimary,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -167,8 +172,8 @@ class _TabChatState extends State<TabChat> {
                       style: TextStyle(
                         fontSize: 14,
                         color: ThreeTutorService.busyLabelOf(name).isEmpty
-                            ? const Color(0xFF999999)
-                            : const Color(0xFF07C160),
+                            ? AppColors.of(context).textSecondary
+                            : AppColors.of(context).accent,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -181,7 +186,10 @@ class _TabChatState extends State<TabChat> {
                 padding: const EdgeInsets.only(left: 8),
                 child: Text(
                   timeText,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFFB0B0B0)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.of(context).textTertiary,
+                  ),
                 ),
               ),
             ],
@@ -288,7 +296,9 @@ class _TabChatState extends State<TabChat> {
             child: const Text('取消'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.of(context).danger,
+            ),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('删除'),
           ),
