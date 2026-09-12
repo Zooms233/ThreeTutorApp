@@ -794,34 +794,43 @@ class ThreeTutorService {
     _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态（总结→更新→群聊全程）
 
     try {
-      //下课总结（meta 仍 ongoing）
       final courseDir = await _courseDir(courseName);
-      final dispatch = await rootBundle.loadString(
-        'assets/prompts/dispatch_summary.md',
-      );
-      final messages = await _prompts.teaching(
-        courseDir: courseDir,
-        chatPath: path,
-        tutorName: tutor,
-        dispatch: dispatch,
-      );
-      final result = await _chatLogged(
-        course: courseName,
-        lessonPath: path,
-        scene: '总结',
-        messages: messages,
-        stream: true,
-        label: '总结',
-      );
-      await _appendTutor(path, tutor, result.text, 'teaching');
-      //总结落档即回调：UI 先显示导师告别，再逐条放群聊
-      onMessage?.call({
-        'type': 'message',
-        'phase': 'teaching',
-        'role': 'tutor',
-        'name': tutor,
-        'content': result.text,
-      });
+      //防重复告别：上次总结已落档（课后更新失败）则跳过总结，只重试课后更新；
+      //标记由本方法在总结落档后写入，更新成功后随新课次文件（新 meta）自然失效
+      final meta = await _storage.loadLatestChatMeta(courseName);
+      final summaryDone = meta?['summary_done'] == true;
+
+      if (!summaryDone) {
+        //下课总结（meta 仍 ongoing）
+        final dispatch = await rootBundle.loadString(
+          'assets/prompts/dispatch_summary.md',
+        );
+        final messages = await _prompts.teaching(
+          courseDir: courseDir,
+          chatPath: path,
+          tutorName: tutor,
+          dispatch: dispatch,
+        );
+        final result = await _chatLogged(
+          course: courseName,
+          lessonPath: path,
+          scene: '总结',
+          messages: messages,
+          stream: true,
+          label: '总结',
+        );
+        await _appendTutor(path, tutor, result.text, 'teaching');
+        //总结落档即回调：UI 先显示导师告别，再逐条放群聊
+        onMessage?.call({
+          'type': 'message',
+          'phase': 'teaching',
+          'role': 'tutor',
+          'name': tutor,
+          'content': result.text,
+        });
+        //标记总结已落档：课后更新失败重跑时跳过总结，只重试课后更新（防重复告别）
+        await _storage.patchChatMeta(path, {'summary_done': true});
+      }
 
       //总结落档 → 课后更新（JSON 解析重试 1 次后仍失败 → 保持 ongoing）
       final updated = await _postLessonUpdate(
