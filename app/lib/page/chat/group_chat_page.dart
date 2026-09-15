@@ -416,7 +416,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
   */
 
-  //课程详情页按钮 pop 意图处理：start=开始上课（问候）/ end=今天就到这里（总结+课后更新）
+  //课程详情页按钮 pop 意图处理：start=开始上课（问候）/ end=今天就到这里（课后更新+群聊）
   Future<void> _handleLessonAction(String action) async {
     if (_busy) {
       _toast('上一条生成还未完成，请稍候');
@@ -444,18 +444,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
         _toast('问候处理异常：$e\n可直接发消息继续上课');
       }
     } else {
-      //action == 'end'：下课总结 → 课后更新 → 群聊生成（三段请求，全程锁定输入框）
-      final lesson = await StorageService().getCurrentLesson(widget.courseName);
-      if (!mounted) return;
-      //建档即占 busy：总结请求发出前输入框已锁（service.endLesson 内部再次设置同文案）
-      ThreeTutorService.setBusyForCourse(
-        widget.courseName,
-        '${lesson['tutor']} 正在输入中…',
-      );
+      //action == 'end'：课后更新 → 群聊生成（两段请求，全程锁定输入框）
+      //占 busy：更新请求发出前输入框已锁（service.endLesson 内部维持同文案）
+      ThreeTutorService.setBusyForCourse(widget.courseName, '整理课程进度中…');
       try {
         await _service.endLesson(
           courseName: widget.courseName,
-          //逐条落档即回调：总结（teaching）立即上屏，群聊消息（social）入队逐条弹出
+          //群聊消息逐条落档即回调：入队逐条弹出（当前不再有 teaching 回调，分支留作防御）
           onMessage: (message) {
             if (!mounted) return;
             if (message['phase'] != 'social') {
@@ -476,9 +471,9 @@ class _GroupChatPageState extends State<GroupChatPage> {
         if (!mounted) return;
         _toast('今天到这里，好好休息～');
       } on LlmException catch (e) {
-        //总结或更新失败：meta 保持 ongoing，按钮仍为「今天就到这里」，重新点击即重跑
+        //更新失败：meta 保持 ongoing，按钮仍为「今天就到这里」，重新点击即重跑
         if (!mounted) return;
-        _toast('下课总结失败：$e\n可重新点击「今天就到这里」重试');
+        _toast('课后更新失败：$e\n可重新点击「今天就到这里」重试');
       } catch (e) {
         //兜底：非 LlmException 的异常同样要可见，且继续走 reload（此前会静默：无 toast/
         //无重载/按钮不变——2026-09-08 遗传学「更新请求静默失败」即此路径）
@@ -1132,8 +1127,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //条件：非 busy、非修改模式中、非部分复制模式中（选择期间输入条被提示条占据）、
   //长按消息 = 当前流目标文件的物理最后一条用户行。
   //目标流文件：teaching/qa → 最新课次文件；social → 倒数第二文件尾。
-  //该行之后只可能是本轮回复链（tool_call/tool/tutor），改写截断不波及 auto 群聊行与
-  //下课总结行（见 service._rewriteLastUser）
+  //该行之后只可能是本轮回复链（tool_call/tool/tutor），改写截断不波及 auto 群聊行
+  //（见 service._rewriteLastUser）
   Future<String?> _editableFlowOf(Map<String, dynamic> message) async {
     if (_busy || _editing || _selectCopyTarget != null) return null;
     final flow = await _service.judgeFlow(

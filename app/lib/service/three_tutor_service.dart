@@ -24,7 +24,7 @@ class ThreeTutorService {
   //退出聊天页再进入时仍显示「正在输入中」并锁输入框，避免用户消息与后台生成并发写同一文件。
   //状态由本层（而非页面）持有，且 static 跨实例共享：聊天页每次进入都新建 service 实例，
   //busy 若挂在实例上，退出重进后新实例读不到进行中状态、也收不到完成通知
-  //（Banner 丢失 + 完成后不触发刷新——下课总结→更新→群聊全程跨页面存活的关键）。
+  //（Banner 丢失 + 完成后不触发刷新——下课更新→群聊全程跨页面存活的关键）。
   static final Map<String, String> _busy = {}; //courseName → Banner 文案；无条目 = 空闲
   static final ValueNotifier<int> busyVersion = ValueNotifier(
     0,
@@ -159,15 +159,20 @@ class ThreeTutorService {
             String? toolPath;
             int? offset, limit;
             try {
-              final args = jsonDecode(fn?['arguments'] as String? ?? '{}')
-                  as Map<String, dynamic>;
+              final args =
+                  jsonDecode(fn?['arguments'] as String? ?? '{}')
+                      as Map<String, dynamic>;
               toolPath = args['path'] as String?;
               offset = args['offset'] as int?;
               limit = args['limit'] as int?;
             } catch (_) {}
-            buf.writeln('  [$i] assistant（翻书：$toolPath 第$offset行起${limit ?? ''}行）');
+            buf.writeln(
+              '  [$i] assistant（翻书：$toolPath 第$offset行起${limit ?? ''}行）',
+            );
           } else {
-            final head = (content as String? ?? '').replaceAll('\n', ' ').trim();
+            final head = (content as String? ?? '')
+                .replaceAll('\n', ' ')
+                .trim();
             buf.writeln(
               '  [$i] 导师回复「${head.length > 30 ? '${head.substring(0, 30)}…' : head}」',
             );
@@ -356,8 +361,8 @@ class ThreeTutorService {
 
   //修改重发定位：改写文件中物理最后一条 user 行（content + time=编辑时刻）并截断其后所有行。
   //安全性依据（UI 已判定长按消息 = 当前流目标文件的最后一条 user 行）：该行之后只可能是
-  //本轮回复链（tool_call/tool/tutor）——auto 群聊行与下课总结行要么在别的文件、要么在该行
-  //之前；生成失败时回复链可能残缺，截断后重发即恢复。busy 锁保证判定到执行间无并发写档。
+  //本轮回复链（tool_call/tool/tutor）——auto 群聊行要么在别的文件、要么在该行之前；
+  //生成失败时回复链可能残缺，截断后重发即恢复。busy 锁保证判定到执行间无并发写档。
   Future<void> _rewriteLastUser(String path, String content) async {
     final file = File(path);
     final lines = await file.readAsLines();
@@ -467,7 +472,12 @@ class ThreeTutorService {
         if ((rec as Map<String, dynamic>)['status'] != '✓') break;
         streak++;
       }
-      days = switch (streak) { 0 => 7, 1 => 14, 2 => 30, _ => 60 };
+      days = switch (streak) {
+        0 => 7,
+        1 => 14,
+        2 => 30,
+        _ => 60,
+      };
     }
     final d = DateTime.parse(date).add(Duration(days: days));
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -658,10 +668,7 @@ class ThreeTutorService {
             'time': _now(),
             'content': err,
           });
-          current = [
-            ...current,
-            PromptMessage('tool', err, null, id).toMap(),
-          ];
+          current = [...current, PromptMessage('tool', err, null, id).toMap()];
         } else {
           //成功：只落指针（path/offset/limit），重放时物化读盘
           await _storage.appendChatMessage(path, {
@@ -777,12 +784,13 @@ class ThreeTutorService {
     }
   }
 
-  // —— 场景 5+6+7：下课总结 → 课后更新 → 导师群聊生成 ——
-  //返回值告知 UI 课后更新是否完成（false = meta 保持 ongoing，可重新点击重跑场景 5+6）
+  // —— 场景 6+7：课后更新 → 导师群聊生成 ——
+  //返回值告知 UI 课后更新是否完成（false = meta 保持 ongoing，可重新点击重跑场景 6）
 
-  ///下课总结（含调度指令）→ 落档后自动课后更新 → 群聊生成（失败跳过）。
-  ///onMessage：每条消息落档即回调（总结一条 + 群聊逐条），UI 逐条弹出用。
-  ///抛出 = 总结或更新失败；更新失败时 meta 保持 ongoing、下一课文件不创建。
+  ///课后更新 → 群聊生成（失败跳过）。不再单独生成下课总结——
+  ///真实对话中导师收尾时会自然总结，显式告别语与之重复（2026-09 实测）。
+  ///onMessage：群聊消息逐条落档即回调，UI 逐条弹出用。
+  ///抛出 = 更新失败；更新失败时 meta 保持 ongoing、下一课文件不创建。
   Future<void> endLesson({
     required String courseName,
     void Function(Map<String, dynamic> message)? onMessage,
@@ -791,48 +799,11 @@ class ThreeTutorService {
     final path = lesson['path'] as String;
     final tutor = lesson['tutor'] as String;
     final lessonNo = lesson['lesson'] as int;
-    _setBusy(courseName, '$tutor 正在输入中…'); //跨页面生成中状态（总结→更新→群聊全程）
+    _setBusy(courseName, '整理课程进度中…'); //跨页面生成中状态（更新→群聊全程）
 
     try {
       final courseDir = await _courseDir(courseName);
-      //防重复告别：上次总结已落档（课后更新失败）则跳过总结，只重试课后更新；
-      //标记由本方法在总结落档后写入，更新成功后随新课次文件（新 meta）自然失效
-      final meta = await _storage.loadLatestChatMeta(courseName);
-      final summaryDone = meta?['summary_done'] == true;
-
-      if (!summaryDone) {
-        //下课总结（meta 仍 ongoing）
-        final dispatch = await rootBundle.loadString(
-          'assets/prompts/dispatch_summary.md',
-        );
-        final messages = await _prompts.teaching(
-          courseDir: courseDir,
-          chatPath: path,
-          tutorName: tutor,
-          dispatch: dispatch,
-        );
-        final result = await _chatLogged(
-          course: courseName,
-          lessonPath: path,
-          scene: '总结',
-          messages: messages,
-          stream: true,
-          label: '总结',
-        );
-        await _appendTutor(path, tutor, result.text, 'teaching');
-        //总结落档即回调：UI 先显示导师告别，再逐条放群聊
-        onMessage?.call({
-          'type': 'message',
-          'phase': 'teaching',
-          'role': 'tutor',
-          'name': tutor,
-          'content': result.text,
-        });
-        //标记总结已落档：课后更新失败重跑时跳过总结，只重试课后更新（防重复告别）
-        await _storage.patchChatMeta(path, {'summary_done': true});
-      }
-
-      //总结落档 → 课后更新（JSON 解析重试 1 次后仍失败 → 保持 ongoing）
+      //课后更新（JSON 解析重试 1 次后仍失败 → 保持 ongoing）
       final updated = await _postLessonUpdate(
         courseName,
         courseDir,
@@ -896,7 +867,7 @@ class ThreeTutorService {
       output!,
     );
     _setBusy(courseName, '群里正在输入中…'); //群聊阶段切换 Banner 文案（跨页面状态）
-    //群聊生成：输入=本课对话，写档=本课文件尾（总结之后）；失败跳过，不阻塞课后更新其余成果
+    //群聊生成：输入=本课对话，写档=本课文件尾（教学对话之后）；失败跳过，不阻塞课后更新其余成果
     try {
       await _generateGroupChat(
         courseDir,

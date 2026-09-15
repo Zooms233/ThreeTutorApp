@@ -11,17 +11,23 @@ import 'package:flutter/services.dart' show rootBundle;
 class PromptMessage {
   final String role;
   final String? content; //null 仅用于带 tool_calls 的 assistant 消息（OpenAI 约定）
-  final List<Map<String, dynamic>>? toolCalls; //assistant 的 tool_calls 数组（agent 翻书）；无则 null
+  final List<Map<String, dynamic>>?
+  toolCalls; //assistant 的 tool_calls 数组（agent 翻书）；无则 null
   final String? toolCallId; //tool 消息的 tool_call_id
 
-  const PromptMessage(this.role, [this.content, this.toolCalls, this.toolCallId]);
+  const PromptMessage(
+    this.role, [
+    this.content,
+    this.toolCalls,
+    this.toolCallId,
+  ]);
 
   Map<String, dynamic> toMap() => {
-        'role': role,
-        if (content != null) 'content': content,
-        if (toolCalls != null) 'tool_calls': toolCalls,
-        if (toolCallId != null) 'tool_call_id': toolCallId,
-      };
+    'role': role,
+    if (content != null) 'content': content,
+    if (toolCalls != null) 'tool_calls': toolCalls,
+    if (toolCallId != null) 'tool_call_id': toolCallId,
+  };
 }
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
@@ -198,27 +204,29 @@ class PromptBuilder {
     String latestOf(Map<String, dynamic> row) =>
         (row['records'] as List? ?? const []).isEmpty
         ? ''
-        : ((row['records'] as List).last as Map<String, dynamic>)['status'] as String? ?? '';
+        : ((row['records'] as List).last as Map<String, dynamic>)['status']
+                  as String? ??
+              '';
     String reviewOf(Map<String, dynamic> row) =>
         (row['records'] as List? ?? const []).isEmpty
         ? ''
-        : ((row['records'] as List).last as Map<String, dynamic>)['review'] as String? ?? '';
-    final due = rows
-        .where((r) {
+        : ((row['records'] as List).last as Map<String, dynamic>)['review']
+                  as String? ??
+              '';
+    final due =
+        rows.where((r) {
           final review = reviewOf(r);
           return review.isNotEmpty && review.compareTo(today) <= 0;
-        })
-        .toList()
-      ..sort((a, b) {
-        int weight(Map<String, dynamic> r) => switch (latestOf(r)) {
-          '✗' => 0,
-          '△' => 1,
-          _ => 2,
-        };
-        final c = weight(a).compareTo(weight(b));
-        if (c != 0) return c;
-        return reviewOf(a).compareTo(reviewOf(b));
-      });
+        }).toList()..sort((a, b) {
+          int weight(Map<String, dynamic> r) => switch (latestOf(r)) {
+            '✗' => 0,
+            '△' => 1,
+            _ => 2,
+          };
+          final c = weight(a).compareTo(weight(b));
+          if (c != 0) return c;
+          return reviewOf(a).compareTo(reviewOf(b));
+        });
     final dueNames = due.take(3).map((r) => r['name']).toSet();
 
     //行格式：状态 + 短名 + 错因（有则带）+ ★待复习（到期 top3）；
@@ -440,12 +448,20 @@ class PromptBuilder {
       'type': 'function',
       'function': {
         'name': 'read',
-        'description': '读取教学材料或教学大纲中指定文件的某段内容并追加到对话。文件清单与行号范围见【教学材料目录】（没有目录或找不到文件时不要调用）。只读取目录中列出的文件。',
+        'description':
+            '读取教学材料或教学大纲中指定文件的某段内容并追加到对话。文件清单与行号范围见【教学材料目录】（没有目录或找不到文件时不要调用）。只读取目录中列出的文件。',
         'parameters': {
           'type': 'object',
           'properties': {
-            'path': {'type': 'string', 'description': '目录中的文件路径，如 TEXTBOOK/细胞生物学学习指南.md 或 OUTLINE/教学大纲.md'},
-            'offset': {'type': 'integer', 'description': '起始行号（从 1 开始；省略则从文件开头）'},
+            'path': {
+              'type': 'string',
+              'description':
+                  '目录中的文件路径，如 TEXTBOOK/细胞生物学学习指南.md 或 OUTLINE/教学大纲.md',
+            },
+            'offset': {
+              'type': 'integer',
+              'description': '起始行号（从 1 开始；省略则从文件开头）',
+            },
             'limit': {'type': 'integer', 'description': '读取行数（默认 200，最多 500）'},
           },
           'required': ['path'],
@@ -476,8 +492,7 @@ class PromptBuilder {
     return '【教材 · $path 第 ${start + 1}-$end 行】\n$body';
   }
 
-
-// —— CHAT 历史映射 ——
+  // —— CHAT 历史映射 ——
 
   //meta 行不映射；textbook 指针行物化为 user 消息（读盘现展开——同一指针 + 教材未改则字节级一致，
   //前缀命中沿历史延伸）；user→user（time 并入头部）、tutor→assistant，原文原样（含 @read 行）；
@@ -578,8 +593,8 @@ class PromptBuilder {
 
   // —— 场景拼装 ——
 
-  ///教学（上课对话 / 课前问候 / 下课总结）：全量注入。
-  ///dispatch 非空时（课前问候/下课总结）追加一条 user 调度指令，不写入 CHAT。
+  ///教学（上课对话 / 课前问候）：全量注入。
+  ///dispatch 非空时（课前问候）追加一条 user 调度指令，不写入 CHAT。
   Future<List<Map<String, dynamic>>> teaching({
     required String courseDir,
     required String chatPath,
@@ -672,7 +687,8 @@ class PromptBuilder {
   }) async {
     var rule = await _prompt('learner_extra.md');
     if (fromOtherCourse) {
-      rule = '$rule\n\n注意：留档来自学习者另一门（或另外多门）课程的最近课次，'
+      rule =
+          '$rule\n\n注意：留档来自学习者另一门（或另外多门）课程的最近课次，'
           '请提炼可跨课程迁移的通用学习者画像（讲解偏好、学习习惯），忽略具体课程的知识内容。';
     }
     final parts = <String>[];

@@ -61,11 +61,7 @@ class LlmResult {
   //arguments 为 JSON 字符串；无工具调用时为空列表
   final List<Map<String, dynamic>> toolCalls;
 
-  const LlmResult({
-    required this.text,
-    this.usage,
-    this.toolCalls = const [],
-  });
+  const LlmResult({required this.text, this.usage, this.toolCalls = const []});
 }
 
 class LlmException implements Exception {
@@ -149,7 +145,7 @@ class LlmClient {
 
   ///发起一次对话。stream=false 时等待完整响应（课后更新用）；
   ///stream=true 时逐 chunk 拼接，onDelta 实时回调增量（UI「正在输入中」动画可用）。
-  ///label：场景标签，stdout usage 调试行用（问答/上课/问候/总结/更新/群聊）。
+  ///label：场景标签，stdout usage 调试行用（问答/上课/问候/更新/群聊）。
   ///失败重试后仍耗尽 → 抛 LlmException，由场景层决定善后。
   Future<LlmResult> chat({
     required LlmConfig config,

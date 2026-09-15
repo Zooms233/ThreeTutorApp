@@ -41,12 +41,15 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   }
 
   //本课程是否生成中（任何场景：上课/问答/问候/总结/更新/群聊全程）
-  bool get _courseBusy => ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty;
+  bool get _courseBusy =>
+      ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty;
 
   //读取 STATE、PROGRESS 与最新课次 meta 并刷新
   Future<void> _load() async {
     final state = await StorageService().loadCourseState(widget.courseName);
-    final progress = await StorageService().loadCourseProgress(widget.courseName);
+    final progress = await StorageService().loadCourseProgress(
+      widget.courseName,
+    );
     final meta = await StorageService().loadLatestChatMeta(widget.courseName);
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
@@ -64,16 +67,16 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
         title: const Text('课程详情'),
         actions: [
           //上课控制按钮：三态——生成中禁用（避免并发操作状态机）；
-          //点击 pop 意图返回群聊页执行：start=开新课次建档，end=下课总结
+          //点击 pop 意图返回群聊页执行：start=开新课次建档，end=结束本课（课后更新+群聊）
           TextButton(
             onPressed: _courseBusy
                 ? null
                 : () => Navigator.pop(
-                      context,
-                      _meta?['status'] == 'ongoing' ? 'end' : 'start',
-                    ),
+                    context,
+                    _meta?['status'] == 'ongoing' ? 'end' : 'start',
+                  ),
             child: Text(
-              //忙碌文案即状态：下课流程（总结→更新→群聊）全程禁用，
+              //忙碌文案即状态：下课流程（更新→群聊）全程禁用，
               //完成后 meta 已置 ended，按钮自动变「开始上课」
               _courseBusy
                   ? '正在处理中…'
@@ -127,10 +130,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(
         children: [
-          Text(
-            label,
-            style: TextStyle(fontSize: 14, color: c.textSecondary),
-          ),
+          Text(label, style: TextStyle(fontSize: 14, color: c.textSecondary)),
           const Spacer(),
           Text(value, style: TextStyle(fontSize: 14, color: c.textPrimary)),
         ],
@@ -144,7 +144,8 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
       color: AppColors.of(context).surface,
       margin: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: Colors.transparent, //ListTile 自己的 Material：水波纹不被白底 ColoredBox 吞（Flutter 断言）
+        color: Colors
+            .transparent, //ListTile 自己的 Material：水波纹不被白底 ColoredBox 吞（Flutter 断言）
         child: ListTile(
           title: const Text('课程资料'),
           trailing: Icon(
@@ -155,7 +156,8 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
             Navigator.push(
               context,
               CupertinoPageRoute(
-                builder: (context) => RelationPage(courseName: widget.courseName),
+                builder: (context) =>
+                    RelationPage(courseName: widget.courseName),
               ),
             );
           },
@@ -236,10 +238,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
                     padding: const EdgeInsets.only(top: 4),
                     child: Text(
                       '【${latest['mistake']}】',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: c.danger,
-                      ),
+                      style: TextStyle(fontSize: 12, color: c.danger),
                     ),
                   ),
               ],
@@ -261,10 +260,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
                   if (_hasMistake(records[j]))
                     Text(
                       '【${records[j]['mistake']}】',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: c.danger,
-                      ),
+                      style: TextStyle(fontSize: 12, color: c.danger),
                     ),
                 ],
               ),
