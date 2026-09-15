@@ -7,7 +7,8 @@ import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter/services.dart'
+    show Clipboard, ClipboardData, LogicalKeyboardKey;
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
@@ -1220,7 +1221,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
               ),
               child: GptMarkdown(
                 normalizeItalic(content),
-                style: TextStyle(fontSize: 15, height: 1.4, color: c.userBubbleText),
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.4,
+                  color: c.userBubbleText,
+                ),
                 useDollarSignsForLatex: true,
                 styleSheet: GptMarkdownStyleSheet(
                   latex: const LatexStyle(
@@ -1268,11 +1273,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   ),
                   GestureDetector(
                     onTap: _cancelEdit,
-                    child: Icon(
-                      Icons.cancel,
-                      size: 16,
-                      color: c.textSecondary,
-                    ),
+                    child: Icon(Icons.cancel, size: 16, color: c.textSecondary),
                   ),
                 ],
               ),
@@ -1280,20 +1281,41 @@ class _GroupChatPageState extends State<GroupChatPage> {
           Row(
             children: [
               Expanded(
-                child: TextField(
-                  controller: _inputController,
-                  enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
-                  minLines: 1,
-                  maxLines: 6, //多行输入，超过 6 行内部滚动
-                  keyboardType: TextInputType.multiline,
-                  decoration: InputDecoration(
-                    //生成期间输入框即状态位：文案显示 + 禁用（替代顶部 Banner）
-                    hintText: _busy ? _busyLabel : '输入消息…',
-                    hintStyle: const TextStyle(fontSize: 13),
-                    border: InputBorder.none,
-                    isDense: true,
+                //桌面端快捷发送：Ctrl+Enter（mac 桌面端 ⌘+Enter）；
+                //TextField 自身不消费这两个组合键，事件冒泡到这里触发发送；
+                //不带修饰键的 Enter 仍走 TextField 默认行为——插入换行
+                child: CallbackShortcuts(
+                  bindings: {
+                    const SingleActivator(
+                      LogicalKeyboardKey.enter,
+                      control: true,
+                    ): _sendMessage,
+                    const SingleActivator(
+                      LogicalKeyboardKey.numpadEnter,
+                      control: true,
+                    ): _sendMessage,
+                    const SingleActivator(LogicalKeyboardKey.enter, meta: true):
+                        _sendMessage,
+                    const SingleActivator(
+                      LogicalKeyboardKey.numpadEnter,
+                      meta: true,
+                    ): _sendMessage,
+                  },
+                  child: TextField(
+                    controller: _inputController,
+                    enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
+                    minLines: 1,
+                    maxLines: 6, //多行输入，超过 6 行内部滚动
+                    keyboardType: TextInputType.multiline,
+                    decoration: InputDecoration(
+                      //生成期间输入框即状态位：文案显示 + 禁用（替代顶部 Banner）
+                      hintText: _busy ? _busyLabel : '输入消息…',
+                      hintStyle: const TextStyle(fontSize: 13),
+                      border: InputBorder.none,
+                      isDense: true,
+                    ),
+                    style: const TextStyle(fontSize: 15),
                   ),
-                  style: const TextStyle(fontSize: 15),
                 ),
               ),
               const SizedBox(width: 8),
