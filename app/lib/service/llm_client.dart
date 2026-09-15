@@ -60,8 +60,17 @@ class LlmResult {
   //OpenAI 兼容 tool_calls（agent 翻书用）：每项 {id, type, function:{name, arguments}}
   //arguments 为 JSON 字符串；无工具调用时为空列表
   final List<Map<String, dynamic>> toolCalls;
+  //思考链正文（delta.reasoning_content / message.reasoning_content）：仅思考开启时非空。
+  //教学组开思考时存档并在后续请求回传（DeepSeek 硬约束，见 three_tutor_service）；
+  //关闭思考的服务商不返回该字段，恒为空串
+  final String reasoningContent;
 
-  const LlmResult({required this.text, this.usage, this.toolCalls = const []});
+  const LlmResult({
+    required this.text,
+    this.usage,
+    this.toolCalls = const [],
+    this.reasoningContent = '',
+  });
 }
 
 class LlmException implements Exception {
@@ -285,12 +294,14 @@ class LlmClient {
         );
       }
       var content = '';
+      var reasoningContent = '';
       var toolCalls = const <Map<String, dynamic>>[];
       final choices = json['choices'] as List?;
       if (choices != null && choices.isNotEmpty) {
         final message = (choices.first as Map<String, dynamic>)['message'];
         if (message is Map<String, dynamic>) {
           content = message['content'] as String? ?? '';
+          reasoningContent = message['reasoning_content'] as String? ?? '';
           toolCalls = _normalizeToolCalls(message['tool_calls']);
         }
       }
@@ -298,12 +309,14 @@ class LlmClient {
         text: content,
         usage: _parseUsage(json['usage']),
         toolCalls: toolCalls,
+        reasoningContent: reasoningContent,
       );
     }
 
     //流式：utf8 解码按行缓冲，data: 前缀剥离 → [DONE] 结束；断流（无 [DONE]/超时/解析失败）视为失败，交由重试
     final buffer = StringBuffer();
     final lineBuffer = StringBuffer(); //跨 chunk 的半行
+    final reasoningBuffer = StringBuffer(); //思考链增量聚合（reasoning_content）
     LlmUsage? usage;
     var sawDone = false;
     //流式 tool_calls 聚合：delta 按 index 分片（id/name 只在首片，arguments 跨片拼接）
@@ -346,6 +359,10 @@ class LlmClient {
             final deltaMap = (choices.first as Map<String, dynamic>)['delta'];
             if (deltaMap is Map<String, dynamic>) {
               delta = deltaMap['content'] as String?;
+              final reasoningDelta = deltaMap['reasoning_content'] as String?;
+              if (reasoningDelta != null && reasoningDelta.isNotEmpty) {
+                reasoningBuffer.write(reasoningDelta);
+              }
               final rawToolCalls = deltaMap['tool_calls'];
               if (rawToolCalls is List) {
                 for (final raw in rawToolCalls) {
@@ -404,6 +421,7 @@ class LlmClient {
       toolCalls: _normalizeToolCalls([
         for (final i in toolCallOrder) toolCallSlots[i],
       ]),
+      reasoningContent: reasoningBuffer.toString(),
     );
   }
 

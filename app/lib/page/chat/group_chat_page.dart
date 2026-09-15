@@ -84,7 +84,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //落档仍由 service 实时完成——队列仅控制 UI 呈现；退出重进走 _reload 全量显示（历史消息本就一次呈现）
   final List<Map<String, dynamic>> _socialQueue = [];
   bool _flushingQueue = false; //消费循环进行中（防重入 + busy 变更时 reload 避让判断）
-  static const _socialGap = Duration(seconds: 3); //逐条显示间隔
+  static const _socialGap = Duration(seconds: 2); //逐条显示间隔
 
   bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
 

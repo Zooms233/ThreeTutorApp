@@ -8,6 +8,7 @@ import 'package:three_tutor/page/usage_page.dart';
 import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/theme/app_colors.dart';
 import 'package:three_tutor/theme/app_theme.dart';
 
@@ -42,6 +43,14 @@ class _TabSettingState extends State<TabSetting> {
       if (config['themeMode'] == null && _config['themeMode'] != null) {
         config['themeMode'] = _config['themeMode'];
       }
+      //思考档位同理：加载期间可能已切过，磁盘缺字段时保留内存值
+      if (config['teachingThinkingEffort'] == null) {
+        config['teachingThinkingEffort'] =
+            ThreeTutorService.teachingThinkingEffort;
+      }
+      if (config['textThinkingEffort'] == null) {
+        config['textThinkingEffort'] = ThreeTutorService.textThinkingEffort;
+      }
       _config = config;
       _version = 'v${info.version}';
       _loading = false;
@@ -70,6 +79,39 @@ class _TabSettingState extends State<TabSetting> {
                   value: m,
                   checked: themeModeNotifier.value == m,
                   child: Text(_themeModeLabel(m)),
+                ),
+            ],
+          ),
+          //思考强度：教学组（上课/问答/问候，可翻教材）与日常组（群聊/闲聊/
+          //更新/提炼）两段独立档位，选择即生效并落盘 CONFIG.json；
+          //教学组开思考会存档并回传思考链（DeepSeek 硬约束），默认保持关闭
+          PopupMenuButton<(String, String)>(
+            icon: const Icon(Icons.psychology_outlined),
+            tooltip: '思考强度',
+            onSelected: _setThinkingEffort,
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                enabled: false,
+                child: Text('教学 / 问答（可翻教材）', style: TextStyle(fontSize: 12)),
+              ),
+              for (final e in _efforts)
+                CheckedPopupMenuItem(
+                  value: ('teaching', e),
+                  checked: ThreeTutorService.teachingThinkingEffort == e,
+                  child: Text(_effortLabel(e)),
+                ),
+              const PopupMenuItem(
+                enabled: false,
+                child: Text(
+                  '群聊 / 闲聊 / 更新 / 提炼',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+              for (final e in _efforts)
+                CheckedPopupMenuItem(
+                  value: ('text', e),
+                  checked: ThreeTutorService.textThinkingEffort == e,
+                  child: Text(_effortLabel(e)),
                 ),
             ],
           ),
@@ -105,6 +147,34 @@ class _TabSettingState extends State<TabSetting> {
     ThemeMode.dark => '深色',
     ThemeMode.system => '自动（跟随系统）',
   };
+
+  //思考档位：与请求参数 thinking/reasoning_effort 同值；仅三档（暂不支持 max）
+  static const _efforts = ['disabled', 'low', 'high'];
+
+  String _effortLabel(String e) => switch (e) {
+    'disabled' => '无',
+    'low' => '低',
+    _ => '高',
+  };
+
+  //切换思考强度：内存静态值立即生效（下一次请求即用新档），再写入 CONFIG.json
+  //（下次启动恢复）；先读磁盘最新配置再合并写入，同 _setThemeMode 的防覆盖逻辑
+  Future<void> _setThinkingEffort((String, String) sel) async {
+    final (group, effort) = sel;
+    if (group == 'teaching') {
+      if (ThreeTutorService.teachingThinkingEffort == effort) return;
+      ThreeTutorService.teachingThinkingEffort = effort;
+    } else {
+      if (ThreeTutorService.textThinkingEffort == effort) return;
+      ThreeTutorService.textThinkingEffort = effort;
+    }
+    final config = await StorageService().loadConfig();
+    config['teachingThinkingEffort'] = ThreeTutorService.teachingThinkingEffort;
+    config['textThinkingEffort'] = ThreeTutorService.textThinkingEffort;
+    await StorageService().saveConfig(config);
+    if (!mounted) return;
+    setState(() => _config = config); //内存同步：后续 API 配置保存基于最新配置
+  }
 
   //切换主题模式：全局通知重建 + 写入 CONFIG.json（下次启动恢复）
   //先读磁盘最新配置再合并写入：切换按钮在加载完成前即可点击，

@@ -7,6 +7,7 @@ import 'package:three_tutor/page/tab_chat.dart';
 import 'package:three_tutor/page/tab_contact.dart';
 import 'package:three_tutor/page/tab_setting.dart';
 import 'package:three_tutor/service/storage.dart';
+import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/theme/app_colors.dart';
 import 'package:three_tutor/theme/app_theme.dart';
 
@@ -18,16 +19,26 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-//从 CONFIG.json 恢复主题模式；无字段/读取失败时保持默认（跟随系统）
+//从 CONFIG.json 恢复主题模式与思考强度档位；无字段/读取失败时保持默认
+//（主题跟随系统；思考强度：教学组 disabled / 纯文本组 low）
 Future<void> _restoreThemeMode() async {
   try {
     final config = await StorageService().loadConfig();
     final saved = config['themeMode'] as String?;
-    if (saved == null) return;
-    themeModeNotifier.value = ThemeMode.values.firstWhere(
-      (m) => m.name == saved,
-      orElse: () => ThemeMode.system,
-    );
+    if (saved != null) {
+      themeModeNotifier.value = ThemeMode.values.firstWhere(
+        (m) => m.name == saved,
+        orElse: () => ThemeMode.system,
+      );
+    }
+    final teaching = config['teachingThinkingEffort'] as String?;
+    if (teaching != null && ThreeTutorService.isValidThinkingEffort(teaching)) {
+      ThreeTutorService.teachingThinkingEffort = teaching;
+    }
+    final text = config['textThinkingEffort'] as String?;
+    if (text != null && ThreeTutorService.isValidThinkingEffort(text)) {
+      ThreeTutorService.textThinkingEffort = text;
+    }
   } catch (_) {
     //读取失败不影响启动
   }
@@ -97,10 +108,7 @@ class _HomePageState extends State<HomePage> {
           //顶部细分割线，贴合经典聊天应用底部栏样式（颜色随主题）
           decoration: BoxDecoration(
             border: Border(
-              top: BorderSide(
-                color: AppColors.of(context).divider,
-                width: 0.5,
-              ),
+              top: BorderSide(color: AppColors.of(context).divider, width: 0.5),
             ),
           ),
           child: NavigationBar(

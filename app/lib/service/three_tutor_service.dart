@@ -39,6 +39,17 @@ class ThreeTutorService {
     }
   }
 
+  // —— 思考强度全局配置（设置页两段式档位，CONFIG.json 落盘恢复）——
+  //纯文本组（闲聊/群聊生成/课后更新/画像提炼）共用一档；教学组（上课对话/问答/
+  //课前问候，带翻书 tools）共用一档。取值仅 disabled / low / high（无档位时字段不发送）。
+  //教学组开思考后：响应 reasoning 随 tool_call/tutor 行落档，并在后续请求回传
+  //（DeepSeek 硬约束：带 tools 的请求必须回传历史 reasoning_content，否则 400）
+  static String textThinkingEffort = 'low';
+  static String teachingThinkingEffort = 'disabled';
+
+  static bool isValidThinkingEffort(String v) =>
+      v == 'disabled' || v == 'low' || v == 'high';
+
   ///某课程当前的生成中 Banner 文案（空 = 空闲）
   static String busyLabelOf(String courseName) => _busy[courseName] ?? '';
 
@@ -236,7 +247,7 @@ class ThreeTutorService {
     bool jsonMode = false,
     bool stream = true,
     int? maxTokens, //JSON 场景防截断
-    String? thinkingEffort, //思考档位透传（更新/群聊用 'low'：保指令遵循，砍思考量）
+    String? thinkingEffort, //思考档位透传（各场景由设置页全局两段配置注入，见各调用点）
     List<Map<String, dynamic>>? tools, //OpenAI 兼容 tools 定义（agent 翻书）；null=不带
     void Function(String delta)? onDelta,
     String? label,
@@ -295,6 +306,7 @@ class ThreeTutorService {
       messages: messages,
       stream: false,
       label: '提炼',
+      thinkingEffort: textThinkingEffort, //纯文本组全局档位
     );
     return result.text.trim();
   }
@@ -318,6 +330,7 @@ class ThreeTutorService {
       messages: messages,
       stream: false,
       label: '提炼',
+      thinkingEffort: textThinkingEffort, //纯文本组全局档位
     );
     return result.text.trim();
   }
@@ -350,13 +363,15 @@ class ThreeTutorService {
     String path,
     String name,
     String content,
-    String phase,
-  ) => _storage.appendChatMessage(path, {
+    String phase, {
+    String reasoning = '', //思考链随档落档（教学组开思考时历史回传用）
+  }) => _storage.appendChatMessage(path, {
     'type': 'message',
     'phase': phase,
     'role': 'tutor',
     'name': name,
     'content': content,
+    if (reasoning.isNotEmpty) 'reasoning': reasoning,
   });
 
   //修改重发定位：改写文件中物理最后一条 user 行（content + time=编辑时刻）并截断其后所有行。
@@ -555,6 +570,7 @@ class ThreeTutorService {
               messages: messages,
               stream: true,
               label: '闲聊',
+              thinkingEffort: textThinkingEffort, //纯文本组全局档位
             )
           : await _chatWithTextbook(
               courseName: courseName,
@@ -573,7 +589,14 @@ class ThreeTutorService {
               responder,
             )
           : (responder, result.text.trim());
-      await _appendTutor(path, name, text, phase);
+      await _appendTutor(
+        path,
+        name,
+        text,
+        phase,
+        //思考链仅教学/问答（翻书链路）需要存档回传；闲聊纯文本无回传约束
+        reasoning: social ? '' : result.reasoningContent,
+      );
       return (name, text);
     } finally {
       _setBusy(courseName, '');
@@ -586,9 +609,11 @@ class ThreeTutorService {
   //工具强制出文本）。中间轮次只落指针不落正文：下次请求重放时物化回原样 → 前缀缓存延续。
   //返回最后一轮（纯文本）的 LlmResult；翻书轮次夹带的文本丢弃（罕见，模型以翻书为主）。
   //
-  //思考模式约束（DeepSeek 2026-09 文档）：带 tools 的请求必须完整回传历史 reasoning_content，
-  //否则 400——本层落档从未存过 reasoning_content，故带 tools 的教学/问答/问候统一显式
-  //thinking disabled（非思考模式工具调用完全正常；教学口语回复也不需要思考链）。
+  //思考模式约束（DeepSeek 2026-09 文档）：带 tools 的请求必须完整回传历史
+  //reasoning_content，否则 400。档位由设置页全局配置（teachingThinkingEffort，默认
+  //disabled）；开启后响应 reasoning 随 tool_call/tutor 行落档（'reasoning' 字段），
+  //会话内即时回传（current 链）+ 重放时由 _mapHistory 从档回传。旧档案无 reasoning
+  //字段（disabled 时代）不回传——未思考的轮次无内容可回传，符合约束语义
   Future<LlmResult> _chatWithTextbook({
     required String courseName,
     required String courseDir,
@@ -610,7 +635,7 @@ class ThreeTutorService {
         messages: current,
         stream: true,
         tools: isLast ? null : PromptBuilder.readToolDefs,
-        thinkingEffort: 'disabled', //带 tools 必须思考关闭（见上注释）
+        thinkingEffort: teachingThinkingEffort, //教学组全局档位（见上注释）
         label: label,
         traceTag: '$label#${round + 1}', //临时测试：轮次标识（验证上下文拼接）
       );
@@ -623,13 +648,23 @@ class ThreeTutorService {
         'name': tutor,
         'time': _now(),
         'tool_calls': result.toolCalls,
+        //开思考时落档思考链：后续请求（会话链与重放）回传用
+        if (result.reasoningContent.isNotEmpty)
+          'reasoning': result.reasoningContent,
       });
       _setBusy(courseName, '$tutor 正在翻阅教材…');
 
-      //assistant 消息用与重放相同的 PromptMessage 构造（键序一致，缓存前缀不碎）
+      //assistant 消息用与重放相同的 PromptMessage 构造（键序一致，缓存前缀不碎）；
+      //reasoning 同步入链：翻书循环第二轮请求必须回传，否则 400
       current = [
         ...current,
-        PromptMessage('assistant', null, result.toolCalls, null).toMap(),
+        PromptMessage(
+          'assistant',
+          null,
+          result.toolCalls,
+          null,
+          result.reasoningContent.isEmpty ? null : result.reasoningContent,
+        ).toMap(),
       ];
       for (final call in result.toolCalls) {
         final id = call['id'] as String? ?? '';
@@ -737,7 +772,13 @@ class ThreeTutorService {
         messages: messages,
         label: '上课',
       );
-      await _appendTutor(path, tutor, result.text, 'teaching');
+      await _appendTutor(
+        path,
+        tutor,
+        result.text,
+        'teaching',
+        reasoning: result.reasoningContent,
+      );
       return (tutor, result.text);
     } finally {
       _setBusy(courseName, '');
@@ -777,7 +818,13 @@ class ThreeTutorService {
         messages: messages,
         label: '问候',
       );
-      await _appendTutor(path, tutor, result.text, 'teaching');
+      await _appendTutor(
+        path,
+        tutor,
+        result.text,
+        'teaching',
+        reasoning: result.reasoningContent,
+      );
       return result.text;
     } finally {
       _setBusy(courseName, '');
@@ -847,7 +894,7 @@ class ThreeTutorService {
         //content（叠加思考模式更易触发，2026-09-08 遗传学实测两连空），服务端 bug
         //绕开优于对抗；update.md 已严格约束纯 JSON 输出，_extractJson 负责兼容围栏
         maxTokens: 4096, //防 JSON 截断
-        thinkingEffort: 'low', //格式化 JSON 生成用低强度思考（disabled 会复读指令不执行）
+        thinkingEffort: textThinkingEffort, //纯文本组全局档位（默认 low）
         label: '更新',
       );
       try {
@@ -1022,6 +1069,7 @@ class ThreeTutorService {
       messages: messages,
       stream: true,
       label: '群聊',
+      thinkingEffort: textThinkingEffort, //纯文本组全局档位
       onDelta: (delta) {
         buffer += delta;
         for (;;) {

@@ -41,7 +41,10 @@
 
 **通用 read（格式无关）**：参数 `path`（OUTLINE/ 或 TEXTBOOK/ 下相对路径）+ `offset`/`limit`（行号，1 起始），不做任何格式解析——兼容任意文本教材；行号寻址依据来自注入的【教学材料目录】（标题+起始行号清单，无标题文件按 200 行一段列块）。工具定义：`PromptBuilder.readToolDefs`；执行：`executeReadTool`。执行失败（文件不存在/行号越界/参数错）→ tool 消息返回错误文本，模型对照目录自行修正。
 
-**思考模式约束（DeepSeek 2026-09 文档）**：带 `tools` 的请求必须完整回传历史所有轮次的 `reasoning_content`，否则 400；而本应用落档从未存过 reasoning_content——因此带工具的教学/问答/问候场景统一显式 `thinking: disabled`（非思考模式工具调用正常，教学口语回复也不需要思考链，顺带省思考 token 计费）。不带工具的更新/群聊/聊天维持原思考档位不变。
+**思考模式约束（DeepSeek 2026-09 文档）**：带 `tools` 的请求必须完整回传历史所有轮次的 `reasoning_content`，否则 400。思考强度为设置页右上角的全局两段式配置（教学组 / 日常组各三档：无 / 低 / 高，取值 `disabled` / `low` / `high`，落盘 CONFIG.json 启动恢复；暂不支持 max）：
+
+- **教学组**（上课对话/问答/课前问候，带翻书 tools）共用一档，默认 `disabled`。开启后响应的 `reasoning_content` 随 `tool_call`/tutor 行落档（`reasoning` 字段，只存不展示），会话内翻书循环即时回传（current 链），跨请求由历史拼装从档回传（prompt `_mapHistory` 映射为 `reasoning_content`）；旧档案无该字段（disabled 时代）不回传——未思考的轮次无内容可回传，符合约束语义。切换档位后历史混档（部分行带 reasoning 部分不带）服务端容忍度需实测
+- **日常组**（群聊生成/闲聊/课后更新/画像提炼，纯文本无 tools）共用一档，默认 `low`——群聊/闲聊为人设对话思考收益低，更新曾实测 disabled 复读指令、high 思考爆炸（默认 high 曾思考 6700 token / 75s），low 为收益/成本平衡点
 
 **落档（CHAT 只存指针不存正文，延续材料哲学）**：
 

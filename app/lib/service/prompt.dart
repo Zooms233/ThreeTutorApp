@@ -14,12 +14,15 @@ class PromptMessage {
   final List<Map<String, dynamic>>?
   toolCalls; //assistant 的 tool_calls 数组（agent 翻书）；无则 null
   final String? toolCallId; //tool 消息的 tool_call_id
+  final String?
+  reasoning; //assistant 思考链（回传时映射为 reasoning_content）：教学组开思考时随落档存档
 
   const PromptMessage(
     this.role, [
     this.content,
     this.toolCalls,
     this.toolCallId,
+    this.reasoning,
   ]);
 
   Map<String, dynamic> toMap() => {
@@ -27,6 +30,8 @@ class PromptMessage {
     if (content != null) 'content': content,
     if (toolCalls != null) 'tool_calls': toolCalls,
     if (toolCallId != null) 'tool_call_id': toolCallId,
+    if (reasoning != null && reasoning!.isNotEmpty)
+      'reasoning_content': reasoning,
   };
 }
 
@@ -518,11 +523,21 @@ class PromptBuilder {
       }
       if (row['type'] == 'tool_call') {
         //agent 翻书中间轮：assistant（content=null + tool_calls 原样）
-        //——与首轮请求的 assistant 消息字节级一致，缓存前缀延续
+        //——与首轮请求的 assistant 消息字节级一致，缓存前缀延续；
+        //reasoning 随行回传（教学组开思考时存档；DeepSeek 硬约束：开思考的
+        //历史 assistant 轮次必须回传 reasoning_content，否则 400）
         final toolCalls = (row['tool_calls'] as List<dynamic>?)
             ?.map((e) => e as Map<String, dynamic>)
             .toList();
-        mapped.add(PromptMessage('assistant', null, toolCalls, null));
+        mapped.add(
+          PromptMessage(
+            'assistant',
+            null,
+            toolCalls,
+            null,
+            row['reasoning'] as String?,
+          ),
+        );
         continue;
       }
       if (row['type'] == 'tool') {
@@ -571,7 +586,16 @@ class PromptBuilder {
           '${mapped.last.content}\n$content',
         );
       } else {
-        mapped.add(PromptMessage(role, content));
+        //assistant 回复行：开思考时代的 reasoning 随行回传（老档案无该字段，不回传）
+        mapped.add(
+          PromptMessage(
+            role,
+            content,
+            null,
+            null,
+            isUser ? null : row['reasoning'] as String?,
+          ),
+        );
       }
     }
     return mapped;
