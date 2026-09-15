@@ -71,6 +71,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   bool _socialMode = false; //课后交流切换：false=问答（默认）/ true=群聊讨论；仅会话内存不落盘
   bool _editing = false; //修改模式：输入框内容将替换当前流最后一条用户消息并重生成回复
   String _editFlow = ''; //修改定流（点「修改」时判定的 flow，提交沿用防中途切 toggle 漂移）
+  Map<String, dynamic>? _selectCopyTarget; //部分复制模式：正在选择文本的消息（null=普通模式）
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
@@ -148,6 +149,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
         _lessons = state['lessons'] as int? ?? 0;
         _items = [const _ChatItem.divider('你加入了群聊，现在可以开始聊天了')];
       });
+      _validateSelectCopy(); //消息全清，部分复制目标必失效
       return;
     }
 
@@ -180,6 +182,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
       _lessons = state['lessons'] as int? ?? 0;
       _items = _buildItems(entries, hasMore: _hasMore).reversed.toList();
     });
+    _validateSelectCopy(); //_entries 全量重建，部分复制目标可能失效
   }
 
   //上滑到顶：加载更早的课次（每次 1 个）
@@ -867,7 +870,11 @@ class _GroupChatPageState extends State<GroupChatPage> {
                     child: Column(
                       children: [
                         Expanded(child: _buildMessageList()),
-                        _buildInputBar(), //只读阶段的完整形态预览：禁用
+                        //部分复制模式：输入条换提示条（复制所选 / 退出）
+                        if (_selectCopyTarget != null)
+                          _buildSelectCopyBar()
+                        else
+                          _buildInputBar(), //只读阶段的完整形态预览：禁用
                       ],
                     ),
                   ),
@@ -895,8 +902,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   Widget _buildMessageList() {
-    //长按/右键消息弹出操作菜单（复制/修改，见 _showMessageMenu），
-    //不再用 SelectionArea 自由选择文本（复制为整条源文本）
+    //长按/右键消息弹出操作菜单（部分复制/全部复制/修改，见 _showMessageMenu）；
+    //部分复制模式下目标消息临时改由 SelectionArea 接管，拖选后复制渲染文本
     return ListView.builder(
       controller: _scrollController,
       reverse: true, //从底部（最新消息）开始渲染：进入无跳屏，上滑加载天然锚定
@@ -994,7 +1001,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   // —— 消息长按/右键菜单（复制 / 修改）——
 
   //长按或右键消息：底部弹出操作菜单（深色半透明）。
-  //复制：全部消息可用（复制 content 源文本）；修改：当前流最后一条用户消息额外可用
+  //部分复制：全部消息可用（进入选择模式，拖选后复制渲染文本）；
+  //全部复制：全部消息可用（复制 content 源文本）；修改：当前流最后一条用户消息额外可用
   Future<void> _showMessageMenu(Map<String, dynamic> message) async {
     final editFlow = await _editableFlowOf(message);
     if (!mounted) return;
@@ -1012,7 +1020,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
             children: [
               _menuItem(
                 Icons.copy_rounded,
-                '复制',
+                '部分复制',
+                () => Navigator.pop(context, 'select'),
+              ),
+              const SizedBox(width: 36),
+              _menuItem(
+                Icons.copy_all_rounded,
+                '全部复制',
                 () => Navigator.pop(context, 'copy'),
               ),
               if (editFlow != null) ...[
@@ -1033,10 +1047,63 @@ class _GroupChatPageState extends State<GroupChatPage> {
       await Clipboard.setData(
         ClipboardData(text: message['content'] as String? ?? ''),
       );
-      if (mounted) _toast('已复制', duration: const Duration(seconds: 1));
+      if (mounted) _toast('已全部复制', duration: const Duration(seconds: 1));
+    } else if (action == 'select') {
+      //进入部分复制模式：目标消息换 SelectionArea，输入条换提示条
+      setState(() => _selectCopyTarget = message);
     } else if (action == 'edit' && editFlow != null) {
       _startEdit(message, editFlow);
     }
+  }
+
+  // —— 部分复制（选择模式）——
+
+  //退出部分复制模式：清目标，恢复输入条与长按菜单
+  void _exitSelectCopy() {
+    setState(() => _selectCopyTarget = null);
+  }
+
+  //消息重载后验证部分复制目标：_entries 全量重建（identical 失效）即自动退出，
+  //避免提示条残留、选择挂在已重建的消息上
+  void _validateSelectCopy() {
+    if (_selectCopyTarget == null) return;
+    final alive = _entries.any((e) => identical(e, _selectCopyTarget));
+    if (alive) return;
+    _selectCopyTarget = null;
+    if (mounted) setState(() {}); //提示条 → 输入条，目标消息行恢复长按菜单
+  }
+
+  //部分复制提示条：替换输入条。复制本身走 SelectionArea 内置的系统能力
+  //（移动端选中后弹系统工具条点「复制」，桌面端右键菜单或 Ctrl+C），
+  //这里只负责引导与退出
+  Widget _buildSelectCopyBar() {
+    final c = AppColors.of(context);
+    return Container(
+      color: c.surface,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '拖选要复制的文本，选中后用弹出菜单复制',
+              style: TextStyle(fontSize: 13, color: c.textSecondary),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: _exitSelectCopy,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              textStyle: const TextStyle(fontSize: 13),
+            ),
+            child: const Text('完成'),
+          ),
+        ],
+      ),
+    );
   }
 
   //菜单项：图标 + 文字（白色，深色菜单样式）
@@ -1062,12 +1129,13 @@ class _GroupChatPageState extends State<GroupChatPage> {
   }
 
   //「修改」可用性：返回当前流（teaching/qa/social，与发送同源 judgeFlow），不可用返回 null。
-  //条件：非 busy、非修改模式中、长按消息 = 当前流目标文件的物理最后一条用户行。
+  //条件：非 busy、非修改模式中、非部分复制模式中（选择期间输入条被提示条占据）、
+  //长按消息 = 当前流目标文件的物理最后一条用户行。
   //目标流文件：teaching/qa → 最新课次文件；social → 倒数第二文件尾。
   //该行之后只可能是本轮回复链（tool_call/tool/tutor），改写截断不波及 auto 群聊行与
   //下课总结行（见 service._rewriteLastUser）
   Future<String?> _editableFlowOf(Map<String, dynamic> message) async {
-    if (_busy || _editing) return null;
+    if (_busy || _editing || _selectCopyTarget != null) return null;
     final flow = await _service.judgeFlow(
       widget.courseName,
       toggleActive: _socialMode,
@@ -1123,13 +1191,21 @@ class _GroupChatPageState extends State<GroupChatPage> {
     final role = message['role'] as String? ?? 'tutor';
     final name = message['name'] as String? ?? '';
     final content = message['content'] as String? ?? '';
+    final bubble = role == 'user'
+        ? _buildUserMessage(name, content)
+        : _buildTutorMessage(name, content);
+
+    //部分复制模式：目标消息改由 SelectionArea 接管——长按从选择开始（不再弹菜单），
+    //复制走其内置系统菜单/快捷键（复制的是渲染后文本，所见即所得）；
+    //其余消息照常长按/右键弹菜单
+    if (identical(message, _selectCopyTarget)) {
+      return SelectionArea(child: bubble);
+    }
 
     return GestureDetector(
       onLongPress: () => _showMessageMenu(message),
       onSecondaryTapUp: (_) => _showMessageMenu(message), //桌面端右键同菜单
-      child: role == 'user'
-          ? _buildUserMessage(name, content)
-          : _buildTutorMessage(name, content),
+      child: bubble,
     );
   }
 
