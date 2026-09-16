@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, rootBundle;
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:three_tutor/page/usage_page.dart';
+import 'package:three_tutor/page/setting/usage_page.dart';
 import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
 import 'package:three_tutor/service/storage.dart';
@@ -293,10 +293,8 @@ class _TabSettingState extends State<TabSetting> {
           title: const Text('导师参考提示词'),
           subtitle: const Text('复制模板，应用外生成自定义导师组'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showPromptDialog(
-            '导师参考提示词',
-            'assets/prompts/tutor_template.md',
-          ),
+          onTap: () =>
+              _showPromptDialog('导师参考提示词', 'assets/prompts/tutor_template.md'),
         ),
       ),
     );
@@ -314,10 +312,8 @@ class _TabSettingState extends State<TabSetting> {
           title: const Text('大纲提示词'),
           subtitle: const Text('复制后应用外生成教学大纲'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: () => _showPromptDialog(
-            '大纲生成提示词',
-            'assets/prompts/outline_gen.md',
-          ),
+          onTap: () =>
+              _showPromptDialog('大纲生成提示词', 'assets/prompts/outline_gen.md'),
         ),
       ),
     );
