@@ -3,7 +3,7 @@ import 'package:three_tutor/service/outline.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/theme/app_colors.dart';
 
-//教学进度清单页：渲染大纲（大纲即进度文件，doc/06）——章/节/知识点三层的 ✓/▢ 清单，
+//教学进度清单页：渲染大纲（大纲即进度文件，doc/00）——章/节/知识点三层的 ✓/▢ 清单，
 //高亮第一个待学知识点作为参考焦点。v1 只读：勾选由课后结算自动维护，
 //手动勾选会绕过结算一致性（勾了 [x] 但 PROGRESS 无对应记录），不做；
 //纠正状态可在外部直接编辑大纲文件（逃生门），本页重新进入即重读

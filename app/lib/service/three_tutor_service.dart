@@ -8,10 +8,11 @@ import 'package:flutter/services.dart' show rootBundle;
 
 import 'package:three_tutor/service/key_cipher.dart';
 import 'package:three_tutor/service/llm_client.dart';
+import 'package:three_tutor/service/outline.dart';
 import 'package:three_tutor/service/prompt.dart';
 import 'package:three_tutor/service/storage.dart';
 
-//编排层：五场景的 读档 → 组装 → 调用 → 写档 → 状态推进（04-LLM调用.md 场景与载入）。
+//编排层：五场景的 读档 → 组装 → 调用 → 写档 → 状态推进（00-教学过程.md 场景与载入）。
 //先写后说：用户消息落档后才发请求；回复落档后 UI 才解锁输入框。
 //LLM 只产出文本；status 推进、日期计算、档案轮换等确定性计算全部在本层完成。
 
@@ -787,6 +788,33 @@ class ThreeTutorService {
 
   // —— 场景 4：课前问候（「开始上课」按钮）——
 
+  ///问候调度指令：模板（{导师名}）+ 今日学习内容（doc/00）。
+  ///有大纲且合规：拼入 firstPending 所在节与知识点（指针的课前消费）；
+  ///全 [x] 结课分支：商定复习/延伸/结课；无大纲或解析失败：回退纯模板（教学相长现行为）
+  Future<String> _greetingDispatch(String courseName, String tutor) async {
+    final base = (await rootBundle.loadString(
+      'assets/prompts/dispatch_greeting.md',
+    )).replaceAll('{导师名}', tutor);
+    final text = await _storage.loadCourseOutline(courseName);
+    if (text == null) return base;
+    final (doc, _) = Outline.parse(text);
+    final pending = doc?.firstPending;
+    if (pending == null) {
+      return doc == null
+          ? base
+          : '$base\n（本课程大纲已全部学完。与学习者商定后续：可复习薄弱知识点、横向延伸，或确认结课。）';
+    }
+    //当前节标题（顶部锚点，与进度清单页一致）
+    String sectionTitle = '';
+    for (final ch in doc!.chapters) {
+      for (final sec in ch.sections) {
+        if (sec.items.contains(pending)) sectionTitle = sec.title;
+      }
+    }
+    return '$base\n（本课按大纲推进：今天学习《$sectionTitle》的「${pending.text}」，'
+        '从它开始按大纲顺序逐行推进，一行检验通过再走下一行。）';
+  }
+
   ///meta idle→ongoing → 拼装（含问候调度指令）→ 流式生成 → 写档 phase=teaching。
   ///失败：重试耗尽后 meta 保持 ongoing，抛出（用户直接发消息即走上课对话自然恢复）。
   Future<String> startLesson({required String courseName}) async {
@@ -798,10 +826,9 @@ class ThreeTutorService {
       await _storage.patchChatMeta(path, {'status': 'ongoing'});
 
       final courseDir = await _courseDir(courseName);
-      //占位符替换：dispatch_greeting.md 内的 {导师名} 填入本课导师（与 update.md 规则同规则）
-      final dispatch = (await rootBundle.loadString(
-        'assets/prompts/dispatch_greeting.md',
-      )).replaceAll('{导师名}', tutor);
+      //调度指令：模板 + 今日学习内容（doc/00）——app 从大纲程序化取第一个待学知识点，
+      //无大纲/解析失败回退现行为（教学相长，LLM 与学习者商定方向）
+      final dispatch = await _greetingDispatch(courseName, tutor);
       final messages = await _prompts.teaching(
         courseDir: courseDir,
         chatPath: path,
@@ -877,11 +904,15 @@ class ThreeTutorService {
     void Function(Map<String, dynamic> message)? onMessage,
   }) async {
     Map<String, dynamic>? output;
+    String? rejectReason; //上次输出未通过校验的原因：打回重试时反馈给 LLM（doc/00）
     for (var attempt = 0; attempt < 2; attempt++) {
       final messages = await _prompts.update(
         courseDir: courseDir,
         chatPath: lessonPath,
         tutorName: tutorName,
+        rejectReason: (rejectReason == null || rejectReason.isEmpty)
+            ? null
+            : rejectReason,
       );
       _setBusy(courseName, '整理课程进度中…'); //更新环节的状态文案（区别于总结/群聊）
       final result = await _chatLogged(
@@ -897,10 +928,16 @@ class ThreeTutorService {
         thinkingEffort: textThinkingEffort, //纯文本组全局档位（默认 low）
         label: '更新',
       );
+      //两道闸门：JSON 可解析 + sections_done 可定位到 [ ] 状态知识点；
+      //任一失败打回重试（附失败原因），耗尽后放弃本次勾选（其余更新不执行，return false）
       try {
         output = _extractJson(result.text);
-        break;
+        rejectReason = await _checkSectionsDone(courseName, output);
+        if (rejectReason == null) break;
+        output = null;
+        if (attempt == 1) return false; //重试后仍不合规：文件不动，放弃本次更新
       } on FormatException {
+        rejectReason = 'JSON 解析失败（输出含多余文字或被截断）';
         if (attempt == 1) return false; //重试后仍解析失败
       }
     }
@@ -927,6 +964,21 @@ class ThreeTutorService {
     return true;
   }
 
+  //大纲勾选校验（doc/00）：sections_done 逐项定位到 [ ] 状态知识点；
+  //无大纲课程跳过（教学相长模式无账可勾）。返回 null=通过；非 null=打回原因
+  Future<String?> _checkSectionsDone(
+    String courseName,
+    Map<String, dynamic> output,
+  ) async {
+    final text = await _storage.loadCourseOutline(courseName);
+    if (text == null) return null;
+    final (_, error) = Outline.resolveDone(
+      text,
+      output['sections_done'] as List? ?? const [],
+    );
+    return error;
+  }
+
   //课后更新写档：按序五步，全部确定性计算（04 场景流程）；返回创建的下一课文件路径
   Future<String> _applyLessonUpdate(
     String courseName,
@@ -939,9 +991,8 @@ class ThreeTutorService {
     final today = _today();
     final nextTutor = await _rotateTutor(courseDir, tutorName);
 
-    //1. STATE 单行重写
+    //1. STATE 单行重写（进度由大纲 checkbox 派生，doc/00）
     final state = await _storage.loadCourseState(courseName);
-    state['position'] = output['position'] as String? ?? '';
     state['next_tutor'] = nextTutor;
     state['lessons'] = (state['lessons'] as int? ?? 0) + 1;
     state['last_date'] = today;
@@ -990,6 +1041,24 @@ class ThreeTutorService {
     rows.sort((a, b) => latestDate(a).compareTo(latestDate(b)));
     final progressText = rows.map(jsonEncode).join('\n');
     await File('$courseDir/PROGRESS.jsonl').writeAsString('$progressText\n');
+
+    //2.5 大纲勾选落盘（doc/00）：本课学过的知识点行标 [x]——指针推进的唯一写点。
+    //_postLessonUpdate 已过 _checkSectionsDone（可定位且 [ ] 状态），此处重复 resolveDone
+    //拿到行号（文件小，成本可忽略）后 markDone；无大纲课程跳过；
+    //写失败（文件被外部改动的竞态）不阻塞其余更新，待下节课结算补勾
+    final outlineFile = await _storage.courseOutlineFile(courseName);
+    final doneRaw = output['sections_done'] as List? ?? const [];
+    if (outlineFile != null && doneRaw.isNotEmpty) {
+      final text = await outlineFile.readAsString();
+      final (items, error) = Outline.resolveDone(text, doneRaw);
+      if (error == null) {
+        try {
+          await Outline.markDone(outlineFile.path, items);
+        } catch (e) {
+          debugPrint('大纲勾选写入失败（待下节课结算补勾）：$e');
+        }
+      }
+    }
 
     //3. relation：与现文有差异才重写本课导师档案
     final relation = output['relation'] as String?;

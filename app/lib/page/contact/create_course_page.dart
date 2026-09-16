@@ -75,7 +75,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     }
     if (file == null) return; //用户取消选择
     final path = file.path; //先取出路径（闭包内无法使用可空变量的类型提升）
-    //大纲即进度文件（doc/06）：选定即校验，格式错误当场暴露并展示行号清单，
+    //大纲即进度文件（doc/00）：选定即校验，格式错误当场暴露并展示行号清单，
     //而非等到建课才拦截；不通过则不记录选择
     final text = await file.readAsString();
     final (_, errors) = Outline.parse(text);

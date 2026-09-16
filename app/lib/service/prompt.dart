@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
 
 //组装层：把场景所需的提示词/档案/状态/教材/对话拼成 client 可用的 messages。
-//system 按缓存顺序排列：①规则 → ②档案 → ③状态 → ④本次注入 → 对话历史（04-LLM调用.md）。
+//system 按缓存顺序排列：①规则 → ②档案 → ③状态 → ④本次注入 → 对话历史（00-教学过程.md）。
 //IO 只发生在读取资源时；拼装本身为纯字符串运算。
 
 ///一条请求消息。role: system/user/assistant/tool。
@@ -188,9 +188,9 @@ class PromptBuilder {
   }
 
   String _stateBlock(Map<String, dynamic> state) {
+    //进度由大纲 checkbox 派生（doc/00），不注入位置标签
     return [
       '【课程状态】',
-      '当前讲授位置：${state['position'] ?? ''}',
       '下一节课授课导师：${state['next_tutor'] ?? ''}',
       '累计课时：${state['lessons'] ?? 0}',
       '最近上课日期：${state['last_date'] ?? ''}',
@@ -304,6 +304,13 @@ class PromptBuilder {
     return parts.join('\n\n');
   }
 
+  //教材注入（仅目录）：read 工具的行号寻址簿，教学与问答共用；
+  //大纲即进度文件（doc/00）：
+  //课前内容由调度指令指定，教材退化为纯参考资料（目录 + read 按需）
+  Future<String?> _textbookBlock(String courseDir) async {
+    return _materialToc(courseDir);
+  }
+
   //教学材料目录：OUTLINE/ + TEXTBOOK/ 全部文本文件的「标题 + 起始行号」清单
   //（read 工具的行号寻址簿；无标题文件按 200 行一段列块）。
   Future<String?> _materialToc(String courseDir) async {
@@ -347,102 +354,6 @@ class PromptBuilder {
     }
     if (entries.isEmpty) return null;
     return ['【教学材料目录】', ...entries].join('\n');
-  }
-
-  //position →（相对路径, 起始行, 结束行[含]）；找不到返回 null。
-  //支持旧格式「TEXTBOOK/xxx.md > 节标题」与纯标题（在全部材料里模糊匹配）。
-  Future<(String, int, int)?> _resolvePosition(
-    String courseDir,
-    String pos,
-  ) async {
-    final sep = pos.indexOf(' > ');
-    if (sep >= 0) {
-      final fileRel = pos.substring(0, sep).trim();
-      final section = pos.substring(sep + 3).trim();
-      if (fileRel.isEmpty || section.isEmpty) return null;
-      return _headingRange(courseDir, fileRel, section);
-    }
-    for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
-      final dir = Directory('$courseDir/$sub');
-      if (!dir.existsSync()) continue;
-      final files =
-          dir
-              .listSync()
-              .whereType<File>()
-              .where((e) => _isTextFile(e.path))
-              .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
-      for (final f in files) {
-        final rel = '$sub/${f.uri.pathSegments.last}';
-        final r = await _headingRange(courseDir, rel, pos);
-        if (r != null) return r;
-      }
-    }
-    return null;
-  }
-
-  //在某文件按标题（全等或包含）定位行范围：标题行 → 下一个同级/更高级标题前
-  Future<(String, int, int)?> _headingRange(
-    String courseDir,
-    String rel,
-    String title,
-  ) async {
-    final file = File('$courseDir/$rel');
-    if (!file.existsSync()) return null;
-    final lines = await file.readAsLines();
-    int? start;
-    var level = 0;
-    for (var i = 0; i < lines.length; i++) {
-      if (!lines[i].trim().startsWith('#')) continue;
-      final (hashes, t) = _headingInfoOf(lines[i]);
-      if (start == null) {
-        if (t == title || t.contains(title)) {
-          start = i;
-          level = hashes;
-        }
-      } else if (hashes <= level) {
-        return (rel, start + 1, i); //下一个同级/更高级标题 → 本节结束
-      }
-    }
-    if (start == null) return null;
-    return (rel, start + 1, lines.length);
-  }
-
-  //按行范围读正文（1 起始，含 end）
-  Future<String?> _readLines(
-    String courseDir,
-    String rel,
-    int startLine,
-    int endLine,
-  ) async {
-    final file = File('$courseDir/$rel');
-    if (!file.existsSync()) return null;
-    final lines = await file.readAsLines();
-    if (startLine < 1 || startLine > lines.length) return null;
-    final end = endLine > lines.length ? lines.length : endLine;
-    return lines.sublist(startLine - 1, end).join('\n');
-  }
-
-  //今日教学位置：position 对应内容全文（按行读，超长截断）+ 目录（read 寻址簿）。
-  //position 找不到时仍返回目录——目录是翻书寻址依据，必须可靠在场；仅目录模式传 withBody=false。
-  Future<String?> _textbookBlock(
-    String courseDir,
-    Object? position, {
-    bool withBody = true,
-  }) async {
-    if (!withBody) return _materialToc(courseDir);
-    final pos = position as String? ?? '';
-    final toc = await _materialToc(courseDir);
-    if (pos.isEmpty) return toc;
-    final hit = await _resolvePosition(courseDir, pos);
-    if (hit == null) return toc;
-    final body = await _readLines(courseDir, hit.$1, hit.$2, hit.$3);
-    if (body == null) return toc;
-    var trimmed = body;
-    if (trimmed.length > _textbookLimit) {
-      trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
-    }
-    return ['今日教材进度：$pos\n$trimmed', ?toc].join('\n\n');
   }
 
   // —— agent 翻书工具（通用 read，对齐 pi）——
@@ -611,6 +522,57 @@ class PromptBuilder {
     ];
   }
 
+  // —— 跨课接续（doc/00）——
+
+  ///教学历史拼装：本课尚未开讲（无 teaching 轮）时，载入上一课全文作历史前缀——
+  ///上一课的教学对话（收尾伏笔）与群聊（对学习者薄弱点的课后讨论）是本课的自然背景；
+  ///本课已开讲则不载入（本课历史已含所需上下文）。全量载入，实测过长再截尾（doc/00 实现期决策）
+  Future<List<PromptMessage>> _historyWithPreviousLesson(
+    String courseDir,
+    String chatPath,
+  ) async {
+    if (!await _lessonHasTeachingTurn(chatPath)) {
+      final prev = await _previousLessonPath(courseDir, chatPath);
+      if (prev != null) {
+        final previous = await _mapHistory(courseDir, prev);
+        final current = await _mapHistory(courseDir, chatPath);
+        return [...previous, ...current];
+      }
+    }
+    return _mapHistory(courseDir, chatPath);
+  }
+
+  //课文件是否已有教学轮（粗判：jsonl 由 jsonEncode 写，键序固定，直接字面匹配）
+  Future<bool> _lessonHasTeachingTurn(String chatPath) async {
+    final file = File(chatPath);
+    if (!file.existsSync()) return false;
+    return (await file.readAsString()).contains('"phase":"teaching"');
+  }
+
+  //上一课文件：CHAT/ 下课号小于当前课的最大者（课号从文件名“第N课.jsonl”提取，数值序）
+  Future<String?> _previousLessonPath(String courseDir, String chatPath) async {
+    final dir = Directory('$courseDir/CHAT');
+    if (!dir.existsSync()) return null;
+    final curNo = _lessonNoOf(chatPath);
+    File? prev;
+    var prevNo = -1;
+    for (final e in dir.listSync()) {
+      if (e is! File || !e.path.endsWith('.jsonl')) continue;
+      final n = _lessonNoOf(e.path);
+      if (n < curNo && n > prevNo) {
+        prev = e;
+        prevNo = n;
+      }
+    }
+    return prev?.path;
+  }
+
+  static int _lessonNoOf(String path) {
+    final name = path.split(RegExp(r'[\\/]')).last;
+    final m = RegExp(r'第(\d+)课').firstMatch(name);
+    return m == null ? 0 : int.parse(m.group(1)!);
+  }
+
   //system 尾部拼装工具：非空段以空行连接
   String _join(List<String?> parts) =>
       parts.whereType<String>().where((s) => s.isNotEmpty).join('\n\n');
@@ -646,9 +608,10 @@ class PromptBuilder {
       _progressBlock(progress),
       await _syllabusBlock(courseDir), //教学范围（大纲，可选）
       '今天是$date。',
-      await _textbookBlock(courseDir, state['position']),
+      await _textbookBlock(courseDir), //材料目录（仅目录；课前内容由调度指令指定，doc/00）
     ]);
-    final history = await _mapHistory(courseDir, chatPath);
+    //跨课接续：本课未开讲时载入上一课全文（教学段+群聊段）作历史前缀（doc/00）
+    final history = await _historyWithPreviousLesson(courseDir, chatPath);
     if (dispatch != null && dispatch.isNotEmpty) {
       history.add(PromptMessage('user', dispatch));
     }
@@ -669,7 +632,6 @@ class PromptBuilder {
         ? await _readJson(tutorFile.path)
         : <String, dynamic>{};
     final learner = await _readJson('$courseDir/LEARNER.json');
-    final state = await _readJson('$courseDir/STATE.json');
 
     final system = _join([
       rule,
@@ -677,11 +639,7 @@ class PromptBuilder {
       _tutorBlock(tutor),
       _learnerBlock(learner),
       await _syllabusBlock(courseDir), //教学范围（大纲，可选）
-      await _textbookBlock(
-        courseDir,
-        state['position'],
-        withBody: false, //问答仅注入目录（read 寻址簿），需要哪段 read 哪段
-      ),
+      await _textbookBlock(courseDir), //材料目录（仅目录，需要内容时 read 按需载入）
     ]);
     return _compose(system, await _mapHistory(courseDir, chatPath));
   }
@@ -744,11 +702,14 @@ class PromptBuilder {
     return _compose(system, history);
   }
 
-  ///课后更新：更新指令（含 PROGRESS 规范）+ 现有知识点清单 + 本课导师档案 + 本课对话。
+  ///课后更新：更新指令（含 PROGRESS 规范）+ 现有知识点清单 + 大纲全文（sections_done
+  ///的对照清单与照抄原文来源，doc/00）+ 本课导师档案 + 本课对话；
+  ///rejectReason 非空 = 上次输出未通过校验，作为打回重试的用户消息附在历史尾部
   Future<List<Map<String, dynamic>>> update({
     required String courseDir,
     required String chatPath,
     required String tutorName,
+    String? rejectReason,
   }) async {
     final rule = await _prompt('update.md');
     final tutorFile = await _tutorFile(courseDir, tutorName);
@@ -760,9 +721,19 @@ class PromptBuilder {
     final system = _join([
       rule.replaceAll('{导师名}', tutorName),
       _progressNamesBlock(progress),
+      await _syllabusBlock(courseDir), //大纲全文（含 checkbox 状态）
       _tutorBlock(tutor, level: _TutorBlockLevel.minimal),
     ]);
-    return _compose(system, await _mapHistory(courseDir, chatPath));
+    final history = await _mapHistory(courseDir, chatPath);
+    if (rejectReason != null && rejectReason.isNotEmpty) {
+      history.add(
+        PromptMessage(
+          'user',
+          '上一次输出未通过校验：$rejectReason\n请修正后严格按规则重新返回 JSON。',
+        ),
+      );
+    }
+    return _compose(system, history);
   }
 
   //按档案内 name 字段定位课程内档案文件（tutor_a/b/c.json）

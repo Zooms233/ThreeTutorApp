@@ -73,7 +73,7 @@ class _RelationPageState extends State<RelationPage> {
   // —— 教学大纲 / 教学材料（添加、删除）——
 
   //导入/更换教学大纲：与导师组导入同模式——粘贴为主入口，文件回填为次入口；
-  //大纲即进度文件（doc/06），校验不过展示行号错误且不动现有大纲
+  //大纲即进度文件（doc/00），校验不过展示行号错误且不动现有大纲
   Future<void> _importOutline() async {
     final text = await showPasteImportDialog(
       context,

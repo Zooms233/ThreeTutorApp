@@ -1,9 +1,9 @@
 import 'dart:io';
 
-//大纲解析与校验：大纲即进度文件（doc/06）。
+//大纲解析与校验：大纲即进度文件（doc/00）。
 //结构约定：`#` 章 / `##` 节 / `- [ ]`|`- [x]` 原子知识点——二态、无编号、文本全文唯一。
 //解析与校验一体：parse 成功即校验通过；任何不合规格行都是错误并带行号，
-//导入时拒绝——绝不静默降级（doc/06 遗传学事故教训：失效被吞是事故根源之一）。
+//导入时拒绝，不静默降级（doc/00）。
 
 ///原子知识点行：大纲状态的最小单位（一个可独立检验的知识点）
 class OutlineItem {
@@ -282,6 +282,78 @@ class Outline {
       return (null, [const OutlineError(0, '文件不存在')]);
     }
     return parse(await file.readAsString());
+  }
+
+  ///结算勾选校验（doc/00）：把 LLM 报告的 sections_done 逐项定位到 [ ] 状态的知识点行。
+  ///sectionsDone 项为 {"text": 原文, "evidence": 对话证据}（evidence 仅作 LLM 自检约束，不参与匹配）。
+  ///匹配策略：先精确匹配；未命中再做前缀匹配且要求唯一命中（容 LLM 微小改写，防歧义误勾）。
+  ///返回 (items, error)：error 非空 = 存在无法定位/状态不符的项，调用方打回重试、文件不动
+  static (List<OutlineItem>, String?) resolveDone(
+    String content,
+    List<dynamic> sectionsDone,
+  ) {
+    final (doc, errors) = parse(content);
+    if (doc == null) return (const [], '大纲格式不合规：${summarize(errors)}');
+    final all = <OutlineItem>[
+      for (final ch in doc.chapters)
+        for (final sec in ch.sections) ...sec.items,
+    ];
+    final resolved = <OutlineItem>[];
+    for (final raw in sectionsDone) {
+      final name =
+          raw is Map ? (raw['text'] as String? ?? '').trim() : raw.toString().trim();
+      if (name.isEmpty) return (const [], 'sections_done 存在空项');
+      //精确匹配优先
+      var hit = all.where((it) => it.text == name).toList();
+      if (hit.isEmpty) {
+        //前缀兜底（双向），命中不唯一视同失败
+        hit = all
+            .where(
+              (it) =>
+                  (it.text.startsWith(name) || name.startsWith(it.text)) &&
+                  name.length >= it.text.length ~/ 2,
+            )
+            .toList();
+        if (hit.length > 1) {
+          return (const [], '「$name」匹配到多个知识点，须逐字照抄大纲原文');
+        }
+      }
+      if (hit.isEmpty) {
+        return (const [], '「$name」不在大纲未勾选知识点中（须逐字照抄大纲原文）');
+      }
+      final it = hit.first;
+      if (it.done) {
+        return (const [], '「${it.text}」已是已学状态，不重复登记');
+      }
+      resolved.add(it);
+    }
+    return (resolved, null);
+  }
+
+  ///将指定知识点行改标 [x] 并写回（指针推进的唯一写入口，doc/00）：
+  ///按 lineNo 定位，落盘前逐行重新解析核验（文本相符且为 [ ] 状态）——
+  ///文件被外部改动时拒绝静默错写；只替换 checkbox 记号，其余字节原样。
+  ///失败抛 FormatException，文件不写入
+  static Future<void> markDone(String path, List<OutlineItem> items) async {
+    final file = File(path);
+    final lines = await file.readAsLines();
+    for (final item in items) {
+      final idx = item.lineNo - 1;
+      if (idx < 0 || idx >= lines.length) {
+        throw FormatException('第${item.lineNo}行不存在（文件可能被外部修改）');
+      }
+      final m = _itemRe.firstMatch(lines[idx].trim());
+      if (m == null || m.group(2)!.trim() != item.text) {
+        throw FormatException(
+          '第${item.lineNo}行与知识点「${item.text}」不符（文件可能被外部修改）',
+        );
+      }
+      if (m.group(1) == 'x') {
+        throw FormatException('第${item.lineNo}行已是已学状态');
+      }
+      lines[idx] = lines[idx].replaceFirst('- [ ] ', '- [x] ');
+    }
+    await file.writeAsString('${lines.join('\n')}\n');
   }
 
   //错误摘要（SnackBar 等单行场景）：前 max 条「第N行 原因」+ 余数提示

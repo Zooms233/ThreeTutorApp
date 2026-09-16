@@ -302,7 +302,7 @@ class _TabSettingState extends State<TabSetting> {
     );
   }
 
-  //大纲提示词入口卡：大纲即进度文件（doc/06），格式不合规则导入被拒——
+  //大纲提示词入口卡：大纲即进度文件（doc/00），格式不合规则导入被拒——
   //用提示词在外部 AI 中生成，比手写更不容易出格式偏差
   Widget _buildOutlinePromptEntry() {
     return Container(
@@ -311,8 +311,8 @@ class _TabSettingState extends State<TabSetting> {
         color: AppColors.of(context).surface,
         child: ListTile(
           leading: const Icon(Icons.checklist_outlined),
-          title: const Text('大纲生成提示词'),
-          subtitle: const Text('复制提示词，应用外生成教学大纲'),
+          title: const Text('大纲提示词'),
+          subtitle: const Text('复制后应用外生成教学大纲'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => _showPromptDialog(
             '大纲生成提示词',

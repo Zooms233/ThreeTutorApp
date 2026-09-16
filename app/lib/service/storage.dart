@@ -147,7 +147,7 @@ class StorageService {
     final courseDir = await getCourseDir(courseName);
     if (courseDir.existsSync()) return '同名课程已存在';
 
-    //大纲即进度文件（doc/06）：入库即校验，不合格拒绝建课——不静默收下不合规格大纲；
+    //大纲即进度文件（doc/00）：入库即校验，不合格拒绝建课——不静默收下不合规格大纲；
     //放在建目录之前：失败时无半成品残留
     if (syllabusText != null && syllabusText.trim().isNotEmpty) {
       final (_, errors) = Outline.parse(syllabusText);
@@ -719,12 +719,19 @@ class StorageService {
     };
   }
 
-  //读课程教学大纲全文（大纲即进度文件，仅一份；无则 null）
-  Future<String?> loadCourseOutline(String courseName) async {
+  //课程大纲文件（仅一份；无则 null）
+  Future<File?> courseOutlineFile(String courseName) async {
     final courseDir = await getCourseDir(courseName);
     final names = await _listSubFiles(courseDir, 'OUTLINE');
     if (names.isEmpty) return null;
-    return File('${courseDir.path}/OUTLINE/${names.first}').readAsString();
+    return File('${courseDir.path}/OUTLINE/${names.first}');
+  }
+
+  //读课程教学大纲全文（大纲即进度文件，仅一份；无则 null）
+  Future<String?> loadCourseOutline(String courseName) async {
+    final file = await courseOutlineFile(courseName);
+    if (file == null) return null;
+    return file.readAsString();
   }
 
   Future<List<String>> _listSubFiles(Directory courseDir, String sub) async {
@@ -741,7 +748,7 @@ class StorageService {
   }
 
   //添加教学材料：复制进课程 TEXTBOOK/ 子目录（参考数据库，格式不限）。
-  //教学大纲不走这里：大纲即进度文件（doc/06），走 saveCourseOutline（文本 + 校验）
+  //教学大纲不走这里：大纲即进度文件（doc/00），走 saveCourseOutline（文本 + 校验）
   //返回 null=成功；返回字符串=失败原因
   Future<String?> addCourseMaterial(
     String courseName,
@@ -759,7 +766,7 @@ class StorageService {
     }
   }
 
-  //写入/更换教学大纲：大纲即进度文件（doc/06）——先校验后清旧再写新（固定文件名），
+  //写入/更换教学大纲：大纲即进度文件（doc/00）——先校验后清旧再写新（固定文件名），
   //校验失败时旧大纲原样保留。粘贴与文件回填两条路径统一收拢于此
   //返回 null=成功；返回字符串=失败原因
   Future<String?> saveCourseOutline(String courseName, String text) async {

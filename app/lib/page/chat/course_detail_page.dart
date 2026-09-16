@@ -21,7 +21,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   Map<String, dynamic> _state = {};
   Map<String, dynamic>? _meta; //最新课次 meta（上课控制按钮状态判定；null=从未上课）
   List<Map<String, dynamic>> _progress = []; //知识点（新在前）
-  OutlineDoc? _outline; //大纲解析结果（大纲即进度文件，doc/06；null=无大纲或不合规）
+  OutlineDoc? _outline; //大纲解析结果（大纲即进度文件，doc/00；null=无大纲或不合规）
   final Set<int> _expanded = {}; //展开全部历史状态块的知识点索引
   bool _loading = true;
 
@@ -106,7 +106,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
           : ListView(
               children: [
                 _buildStateCard(),
-                _buildOutlineRow(), //教学进度：大纲即进度文件，从大纲派生（doc/06）
+                _buildOutlineRow(), //教学进度：大纲即进度文件，从大纲派生（doc/00）
                 _buildRelationRow(),
                 _buildProgressSection(),
               ],
@@ -114,7 +114,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     );
   }
 
-  //状态三行（读 STATE）：position 已退役——进度由大纲派生（doc/06），见 _buildOutlineRow
+  //状态三行（读 STATE）：进度由大纲派生（doc/00），见 _buildOutlineRow
   Widget _buildStateCard() {
     final nextTutor = _state['next_tutor'] as String? ?? '';
     final lessons = _state['lessons'] as int? ?? 0;
