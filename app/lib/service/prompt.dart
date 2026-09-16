@@ -36,7 +36,6 @@ class PromptMessage {
 }
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
-const _syllabusLimit = 4000; //教学大纲截断上限（大纲通常短，全文注入）
 
 //教材按需载入的公共工具：切节/物化/@read 解析。
 //物化与翻书回填共用同一模板与同一读盘路径——两处字节级一致是前缀命中的关键（doc/04）。
@@ -295,10 +294,7 @@ class PromptBuilder {
     if (files.isEmpty) return null;
     final parts = <String>[];
     for (final f in files) {
-      var text = await f.readAsString();
-      if (text.length > _syllabusLimit) {
-        text = '${text.substring(0, _syllabusLimit)}\n……大纲内容过长，已截断';
-      }
+      final text = await f.readAsString();
       parts.add('【教学范围 · ${f.uri.pathSegments.last}】\n$text');
     }
     return parts.join('\n\n');
