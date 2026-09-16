@@ -1,9 +1,15 @@
 # ThreeTutor
 
-经典 IM 风格的 AI 一对一教学聊天应用
+经典 IM 风格的 AI 一对一教学聊天应用（三位 AI 导师 · 一对一教学）
 
 ## 文件结构
 
-app/ Flutter 应用（package: three_tutor）
-doc/ 设计文档
-参考资料/ pi agent 源码（agent 功能参考）、DeepSeek API 文档
+- app/ Flutter 应用（package: three_tutor）
+- doc/ 设计文档：`教学过程.md`（顶层设计）、`调试.md`，及 `chat/ contact/ setting/` 下按页面组织的设计文档（与 `app/lib/page` 目录一一对应）
+- 参考资料/ pi agent 源码（agent 功能参考）、DeepSeek API 文档
+
+## 代码与 doc 的统一
+
+- 行为以代码为准：改代码必须同步更新对应页面文档；新增/重命名/删除页面同步建/改/删文档与跳转链接——不允许 doc 描述不存在的代码
+- 页面文档结构：页面绘制（大图 + 图内 `←` 注释）→ 页面级跳转（仅 page 间导航，markdown 相对链接；对话框/菜单属页内交互，不算跳转）→ 组件说明 → 数据存储
+- 跨页面机制（教学过程、大纲校验、调试手段、USAGE 账本）只写在 `教学过程.md` / `调试.md`，页面文档链接引用，不重复叙述
