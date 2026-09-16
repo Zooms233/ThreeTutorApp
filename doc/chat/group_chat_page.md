@@ -42,7 +42,7 @@
 | idle · 上过课 | 未激活（默认） | 问答 | qa | 同上 |
 | idle · 上过课 | 激活 | 群聊讨论 | social | 上一课文件尾（群聊之后） |
 
-- 问答：由 STATE.next_tutor 一对一回应，可参考教材（agent 翻书）；讨论：三位导师依话题选人回应，靠发言者名自然区分
+- 问答：由 STATE.next_tutor 一对一回应，可参考教材（agent 翻书，工具机制见 [教学过程.md](../教学过程.md)）；讨论：三位导师依话题选人回应，靠发言者名自然区分
 - 切换按钮仅 idle 且累计课时 ≥1 显示；切换状态仅会话内存（重启恢复默认不激活）
 
 ### 生成中状态（busy）
@@ -100,6 +100,6 @@
 - `meta`：lesson 课次号 / date 本课完成日期（创建预填，课后结算改写实际完成日；会话列表时间位来源）/ tutor 本课导师 / status = idle 已建未开课（交流期）· ongoing 上课中 · ended 已完成（改写后立即创建下一课文件）
 - `message`：phase = teaching 上课 · social 课后群聊与讨论 · qa 交流期问答；name = 发言者（用户为称呼）；content 支持 Markdown 与 LaTeX；`time` 仅用户消息携带（写入时刻，渲染排序的时间锚点）；`auto` 仅课后自动生成的群聊消息携带（UI 渲染忽略）
 - `tool_call`：agent 翻书中间轮（tool_calls 原样 + 可选 reasoning 思考链，供后续请求回传）；不渲染
-- `tool`：翻书结果——成功只存指针（path/offset/limit，重放时物化读盘；旧格式 file/section 兼容），失败存 content 错误快照；渲染为「📖 …」系统行
+- `tool`：翻书结果——read 存指针（path/offset/limit，重放时物化读盘）、search 存 content 快照（关键词搜索结果，重放直接用）；失败存错误文本快照；旧格式 file/section 兼容；渲染为「📖 …」系统行
 - 课次区间四段 = 交流（qa，写最新文件头）+ 教学 + 群聊（auto）+ 群聊讨论（social，写上一课文件尾）
 - 文件创建：懒建——首条消息发送或「开始上课」时（见 [tab_chat.md](tab_chat.md)）；每条消息实时追加（先写后说）

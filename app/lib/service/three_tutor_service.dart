@@ -168,6 +168,7 @@ class ThreeTutorService {
             final fn =
                 (calls.first as Map<String, dynamic>)['function']
                     as Map<String, dynamic>?;
+            final fnName = fn?['name'] as String? ?? '?';
             String? toolPath;
             int? offset, limit;
             try {
@@ -179,7 +180,7 @@ class ThreeTutorService {
               limit = args['limit'] as int?;
             } catch (_) {}
             buf.writeln(
-              '  [$i] assistant（翻书：$toolPath 第$offset行起${limit ?? ''}行）',
+              '  [$i] assistant（翻书:$fnName $toolPath 第$offset行起${limit ?? ''}行）',
             );
           } else {
             final head = (content as String? ?? '')
@@ -604,10 +605,10 @@ class ThreeTutorService {
     }
   }
 
-  // —— agent 翻书（按需载入教材，对齐 pi agent harness）——
-  //请求带 read_textbook 工具 → 响应含 tool_calls → 执行（读盘切节）→ 落档 tool_call/tool
-  //指针行 → 以 tool 消息追加上下文 → 再请求，循环直到无翻书（上限 maxRounds 轮，末轮不带
-  //工具强制出文本）。中间轮次只落指针不落正文：下次请求重放时物化回原样 → 前缀缓存延续。
+  // —— agent 翻书（按需载入材料，对齐 pi agent harness）——
+  //请求带 read/search 工具 → 响应含 tool_calls → 执行（read 落指针、search 落快照）
+  //→ 以 tool 消息追加上下文 → 再请求，循环直到无翻书（上限 maxRounds 轮，末轮不带
+  //工具强制出文本）。中间轮次只落指针/快照不落正文：下次请求重放时还原 → 前缀缓存延续。
   //返回最后一轮（纯文本）的 LlmResult；翻书轮次夹带的文本丢弃（罕见，模型以翻书为主）。
   //
   //思考模式约束（DeepSeek 2026-09 文档）：带 tools 的请求必须完整回传历史
@@ -635,7 +636,7 @@ class ThreeTutorService {
         scene: scene,
         messages: current,
         stream: true,
-        tools: isLast ? null : PromptBuilder.readToolDefs,
+        tools: isLast ? null : PromptBuilder.agentToolDefs,
         thinkingEffort: teachingThinkingEffort, //教学组全局档位（见上注释）
         label: label,
         traceTag: '$label#${round + 1}', //临时测试：轮次标识（验证上下文拼接）
@@ -670,6 +671,7 @@ class ThreeTutorService {
       for (final call in result.toolCalls) {
         final id = call['id'] as String? ?? '';
         final fn = call['function'] as Map<String, dynamic>?;
+        final fname = fn?['name'] as String? ?? '';
         String? toolPath; //read 工具的 path（目录中相对路径）
         int? offset, limit;
         String? content;
@@ -677,6 +679,30 @@ class ThreeTutorService {
           final args =
               jsonDecode(fn?['arguments'] as String? ?? '{}')
                   as Map<String, dynamic>;
+          if (fname == 'search') {
+            //search：关键词定位（先 search 拿行号再 read 精读）
+            content = PromptBuilder.executeSearchTool(
+              courseDir,
+              args['pattern'] as String? ?? '',
+              args['path'] as String?,
+            );
+            if (content == null) {
+              throw const FormatException('search 参数非法');
+            }
+            //成功：结果快照落档（重放直接用快照，不再物化）
+            await _storage.appendChatMessage(path, {
+              'type': 'tool',
+              'tool_call_id': id,
+              'name': tutor,
+              'time': _now(),
+              'content': content,
+            });
+            current = [
+              ...current,
+              PromptMessage('tool', content, null, id).toMap(),
+            ];
+            continue;
+          }
           toolPath = args['path'] as String?;
           offset = args['offset'] as int?;
           limit = args['limit'] as int?;
@@ -694,7 +720,9 @@ class ThreeTutorService {
         }
         if (content == null) {
           //未找到/参数错：错误文本作为快照落档（重放直接用，不再物化）
-          final err = toolPath == null || toolPath.isEmpty
+          final err = fname == 'search'
+              ? '【search】参数非法（需 pattern；path 必须是目录中已列出的文件）。'
+              : toolPath == null || toolPath.isEmpty
               ? '【read】参数解析失败，请核对 path（目录中的文件路径）。'
               : '【read】文件「$toolPath」不存在或行号超出范围，请对照【教学材料目录】重新调用。';
           await _storage.appendChatMessage(path, {
@@ -763,7 +791,7 @@ class ThreeTutorService {
         chatPath: path,
         tutorName: tutor,
       );
-      //agent 翻书：请求带 read_textbook 工具，需要时导师按需读教材节追加上下文
+      //agent 翻书：请求带 read/search 工具，需要时导师按需查阅材料追加上下文
       final result = await _chatWithTextbook(
         courseName: courseName,
         courseDir: courseDir,

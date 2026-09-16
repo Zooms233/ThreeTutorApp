@@ -37,6 +37,80 @@ class PromptMessage {
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
 
+//按字符预算保留整行数：返回可保留的行数（不拦腰断行；单行超限至少保留首行）
+int _keptLineCount(List<String> lines) {
+  var used = 0;
+  var n = 0;
+  for (final l in lines) {
+    final cost = l.length + 1; //+ 换行
+    if (used + cost > _textbookLimit && n > 0) break;
+    used += cost;
+    n++;
+  }
+  return n;
+}
+
+//教学材料目录：OUTLINE/ + TEXTBOOK/ 全部文本文件的「标题 + 起始行号」清单
+//（read/search 工具的行号寻址簿；标题最多列 200 条，超出部分补 200 行分段块——
+//保证全文可寻址；无标题文件整体按 200 行一段列块）。
+Future<String?> materialTocOf(String courseDir) async {
+  final entries = <String>[];
+  for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
+    final dir = Directory('$courseDir/$sub');
+    if (!dir.existsSync()) continue;
+    final files =
+        dir
+            .listSync()
+            .whereType<File>()
+            .where((e) => PromptBuilder._isTextFile(e.path))
+            .toList()
+          ..sort((a, b) => a.path.compareTo(b.path));
+    if (files.isEmpty) continue;
+    for (final f in files) {
+      final name = f.uri.pathSegments.last;
+      final rel = '$sub/$name';
+      final lines = await f.readAsLines();
+      entries.add('- $rel（共 ${lines.length} 行）');
+      //标题行 + 行号（最多 200 条；超出后对剩余区间补分段块，保证全文可寻址）
+      final headingLines = <String>[];
+      var headingsTotal = 0;
+      var lastListedHeadingLine = 0; //最后一个已列出标题所在行
+      for (var i = 0; i < lines.length; i++) {
+        if (!lines[i].trim().startsWith('#')) continue;
+        final (_, title) = _headingInfoOf(lines[i]);
+        if (title.isEmpty) continue;
+        headingsTotal++;
+        if (headingLines.length < 200) {
+          headingLines.add('  · $title …… 第 ${i + 1} 行');
+          lastListedHeadingLine = i + 1;
+        }
+      }
+      if (headingLines.isEmpty) {
+        //无标题：按 200 行一段列块（read 用 offset 定位）
+        final blocks = (lines.length + 199) ~/ 200;
+        for (var b = 0; b < blocks && b < 50; b++) {
+          final start = b * 200 + 1;
+          final end = start + 199 > lines.length ? lines.length : start + 199;
+          entries.add('  · 第${b + 1}段（$start-$end 行）…… 第 $start 行');
+        }
+      } else {
+        entries.addAll(headingLines);
+        if (headingsTotal > 200) {
+          //标题超限：已列出标题之后的区间按 200 行补分段块
+          var start = lastListedHeadingLine + 1;
+          for (var n = 0; start <= lines.length && n < 50; n++) {
+            final end = start + 199 > lines.length ? lines.length : start + 199;
+            entries.add('  · 第$start-$end 行段 …… 第 $start 行');
+            start = end + 1;
+          }
+        }
+      }
+    }
+  }
+  if (entries.isEmpty) return null;
+  return ['【教学材料目录】', ...entries].join('\n');
+}
+
 //教材按需载入的公共工具：切节/物化/@read 解析。
 //物化与翻书回填共用同一模板与同一读盘路径——两处字节级一致是前缀命中的关键（doc/04）。
 
@@ -90,7 +164,7 @@ String? readTextbookSection(String courseDir, String file, String section) {
 String textbookMaterialization(String file, String section, String body) =>
     '【教材 · $file > $section】\n$body';
 
-//物化一条：读盘→截断→模板，一条龙；未命中返回 null（重放时跳过该指针）
+//物化一条：读盘→切节→按行截断→模板，一条龙；未命中返回 null（重放时跳过该指针）
 String? materializeTextbookSection(
   String courseDir,
   String file,
@@ -100,7 +174,8 @@ String? materializeTextbookSection(
   if (body == null) return null;
   var trimmed = body;
   if (trimmed.length > _textbookLimit) {
-    trimmed = '${trimmed.substring(0, _textbookLimit)}\n……本节内容过长，已截断';
+    final lines = trimmed.split('\n');
+    trimmed = '${lines.sublist(0, _keptLineCount(lines)).join('\n')}\n……本节内容过长，已截断';
   }
   return textbookMaterialization(file, section, trimmed);
 }
@@ -303,65 +378,19 @@ class PromptBuilder {
   //教材注入（仅目录）：read 工具的行号寻址簿，教学与问答共用；
   //大纲即进度文件（doc/00）：
   //课前内容由调度指令指定，教材退化为纯参考资料（目录 + read 按需）
-  Future<String?> _textbookBlock(String courseDir) async {
-    return _materialToc(courseDir);
-  }
+  Future<String?> _textbookBlock(String courseDir) => materialTocOf(courseDir);
 
-  //教学材料目录：OUTLINE/ + TEXTBOOK/ 全部文本文件的「标题 + 起始行号」清单
-  //（read 工具的行号寻址簿；无标题文件按 200 行一段列块）。
-  Future<String?> _materialToc(String courseDir) async {
-    final entries = <String>[];
-    for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
-      final dir = Directory('$courseDir/$sub');
-      if (!dir.existsSync()) continue;
-      final files =
-          dir
-              .listSync()
-              .whereType<File>()
-              .where((e) => _isTextFile(e.path))
-              .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
-      if (files.isEmpty) continue;
-      for (final f in files) {
-        final name = f.uri.pathSegments.last;
-        final rel = '$sub/$name';
-        final lines = await f.readAsLines();
-        entries.add('- $rel（共 ${lines.length} 行）');
-        //标题行 + 行号（限制条数防目录过大）
-        final headingLines = <String>[];
-        for (var i = 0; i < lines.length && headingLines.length < 200; i++) {
-          if (!lines[i].trim().startsWith('#')) continue;
-          final (_, title) = _headingInfoOf(lines[i]);
-          if (title.isEmpty) continue;
-          headingLines.add('  · $title …… 第 ${i + 1} 行');
-        }
-        if (headingLines.isEmpty) {
-          //无标题：按 200 行一段列块（read 用 offset 定位）
-          final blocks = (lines.length + 199) ~/ 200;
-          for (var b = 0; b < blocks && b < 50; b++) {
-            final start = b * 200 + 1;
-            final end = start + 199 > lines.length ? lines.length : start + 199;
-            entries.add('  · 第${b + 1}段（$start-$end 行）…… 第 $start 行');
-          }
-        } else {
-          entries.addAll(headingLines);
-        }
-      }
-    }
-    if (entries.isEmpty) return null;
-    return ['【教学材料目录】', ...entries].join('\n');
-  }
-
-  // —— agent 翻书工具（通用 read，对齐 pi）——
-  //只按行读取（path + offset/limit），不做任何格式解析——兼容任意文本教材；
-  //行号寻址依据来自【教学材料目录】。static 常量保证各场景请求字节级一致。
-  static const readToolDefs = [
+  // —— agent 翻书工具（read + search，对齐 pi）——
+  //read 按行读取（path + offset/limit），行号寻址依据【教学材料目录】；
+  //search 关键词定位（先 search 拿行号，再 read 精读），解决长材料盲翻。
+  //static 常量保证各场景请求字节级一致。
+  static const agentToolDefs = [
     {
       'type': 'function',
       'function': {
         'name': 'read',
         'description':
-            '读取教学材料或教学大纲中指定文件的某段内容并追加到对话。文件清单与行号范围见【教学材料目录】（没有目录或找不到文件时不要调用）。只读取目录中列出的文件。',
+            '读取教学材料或教学大纲中指定文件的某段内容并追加到对话。文件清单与行号范围见【教学材料目录】（没有目录或找不到文件时不要调用）。只读取目录中列出的文件。找特定主题时先用 search 定位行号，再用 read 精读。',
         'parameters': {
           'type': 'object',
           'properties': {
@@ -374,15 +403,39 @@ class PromptBuilder {
               'type': 'integer',
               'description': '起始行号（从 1 开始；省略则从文件开头）',
             },
-            'limit': {'type': 'integer', 'description': '读取行数（默认 200，最多 500）'},
+            'limit': {'type': 'integer', 'description': '读取行数（默认 120，最多 500）'},
           },
           'required': ['path'],
         },
       },
     },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'search',
+        'description':
+            '在教学材料/教学大纲中搜索关键词，返回命中行号与内容摘要。想找特定主题时先用 search 定位（拿到文件与行号），再用 read 精读上下文。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'pattern': {
+              'type': 'string',
+              'description': '搜索关键词（不区分大小写的子串匹配）',
+            },
+            'path': {
+              'type': 'string',
+              'description':
+                  '可选：只搜目录中的这个文件（如 TEXTBOOK/讲义.md）；省略则搜索全部材料',
+            },
+          },
+          'required': ['pattern'],
+        },
+      },
+    },
   ];
 
-  //执行 read 工具：按行读取 → 截断 → 模板；未找到/参数非法返回 null（由调用方给错误提示）
+  //执行 read 工具：按行读取 → 按预算收口（保留整行）→ 模板 + 续读指引；
+  //未找到/参数非法返回 null（由调用方给错误提示）
   static String? executeReadTool(
     String courseDir,
     String path,
@@ -395,13 +448,73 @@ class PromptBuilder {
     if (lines.isEmpty) return null;
     final start = (offset ?? 1) - 1;
     if (start < 0 || start >= lines.length) return null;
-    final n = limit ?? 200;
-    final end = start + n > lines.length ? lines.length : start + n;
+    final req = limit ?? 120;
+    final n = req < 1 ? 1 : (req > 500 ? 500 : req);
+    var end = start + n > lines.length ? lines.length : start + n;
+    //按字符预算收口：保留整行到限内（不拦腰断行）
+    final kept = _keptLineCount(lines.sublist(start, end));
+    String hint;
+    if (kept < end - start) {
+      end = start + kept;
+      hint = '\n……已到第 $end 行（全文 ${lines.length} 行），继续读用 offset=${end + 1}';
+    } else if (end < lines.length) {
+      hint = '\n……未到文件尾（共 ${lines.length} 行），继续读用 offset=${end + 1}';
+    } else {
+      hint = '';
+    }
     var body = lines.sublist(start, end).join('\n');
     if (body.length > _textbookLimit) {
-      body = '${body.substring(0, _textbookLimit)}\n……内容过长，已截断';
+      body = '${body.substring(0, _textbookLimit)}\n……内容过长，已截断'; //单行超预算兜底（正常不触发）
     }
-    return '【教材 · $path 第 ${start + 1}-$end 行】\n$body';
+    return '【教材 · $path 第 ${start + 1}-$end 行】\n$body$hint';
+  }
+
+  //执行 search 工具：目录内（或指定文件）逐行子串匹配（不区分大小写）→ 命中行号+内容摘要；
+  //无命中/参数非法返回明确提示文本或 null（null 由调用方给错误提示）
+  static String? executeSearchTool(
+    String courseDir,
+    String pattern,
+    String? path,
+  ) {
+    final needle = pattern.trim().toLowerCase();
+    if (needle.isEmpty) return null;
+    final files = <String>[]; //相对路径
+    if (path != null && path.trim().isNotEmpty) {
+      if (!File('$courseDir/$path').existsSync()) return null;
+      files.add(path);
+    } else {
+      for (final sub in const ['OUTLINE', 'TEXTBOOK']) {
+        final dir = Directory('$courseDir/$sub');
+        if (!dir.existsSync()) continue;
+        for (final e in dir.listSync()) {
+          if (e is! File || !_isTextFile(e.path)) continue;
+          files.add('$sub/${e.uri.pathSegments.last}');
+        }
+      }
+    }
+    if (files.isEmpty) return null;
+    const maxHits = 30;
+    const maxLineLen = 200;
+    final out = <String>[];
+    var hits = 0; //总命中（含未列出的）
+    for (final rel in files) {
+      if (out.length >= maxHits) break;
+      final lines = File('$courseDir/$rel').readAsLinesSync();
+      for (var i = 0; i < lines.length; i++) {
+        if (!lines[i].toLowerCase().contains(needle)) continue;
+        hits++;
+        if (out.length < maxHits) {
+          var text = lines[i].trim();
+          if (text.length > maxLineLen) text = '${text.substring(0, maxLineLen)}…';
+          out.add('$rel 第 ${i + 1} 行：$text');
+        }
+      }
+    }
+    if (hits == 0) return '【搜索 · $pattern】未找到（关键词在材料中不存在，换个说法试试）。';
+    final more = hits > maxHits
+        ? '\n……共 $hits 处命中，仅列前 $maxHits 条；可换更具体的关键词，或用 path 只搜单个文件。'
+        : '';
+    return '【搜索 · $pattern】共 $hits 处命中：\n${out.join('\n')}$more';
   }
 
   // —— CHAT 历史映射 ——
