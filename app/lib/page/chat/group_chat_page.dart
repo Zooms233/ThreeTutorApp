@@ -620,7 +620,16 @@ class _GroupChatPageState extends State<GroupChatPage> {
         _toast('卡片渲染失败，请重试');
         return;
       }
-      final image = await boundary.toImage(pixelRatio: 3);
+      //GPU 单表面物理尺寸上限 16384：超高卡片自动降采样保完整（画质 3x→约2.7x 无感，
+      //可覆盖约三倍常规课次内容量）；1x 仍放不下则放弃并提示，杜绝静默截断
+      final height = boundary.size.height;
+      if (height > 16384) {
+        _toast('本课内容过长，超出单张长图上限，无法完整导出');
+        return;
+      }
+      final image = await boundary.toImage(
+        pixelRatio: (16384 / height).clamp(1.0, 3.0),
+      );
       final byteData = await image.toByteData(format: ImageByteFormat.png);
       image.dispose();
       if (byteData == null) {

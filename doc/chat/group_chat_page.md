@@ -73,7 +73,8 @@
 
 ```
 定位最新 ended 课次（最新 idle 是交流段，不算一节课）
-  → 只取 message 与 tool 行，屏外渲染长图 → RepaintBoundary 截图（pixelRatio 3）
+  → 只取 message 与 tool 行，屏外渲染长图 → RepaintBoundary 截图（pixelRatio ≤3 自适应：
+    GPU 单表面物理上限 16384，超高自动降采样保完整；1x 仍超限则提示放弃，不静默截断）
   → 桌面端：保存对话框选位置（异常回退临时目录）；移动端：临时文件 + 系统查看器打开预览
 ```
 
