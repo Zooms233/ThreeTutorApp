@@ -1,9 +1,9 @@
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:three_tutor/page/contact/tutor_intro_page.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/theme/app_colors.dart';
+import 'package:three_tutor/widget/paste_dialog.dart';
 import 'package:three_tutor/widget/tutor_avatar.dart';
 
 class TabContact extends StatefulWidget {
@@ -106,63 +106,12 @@ class _TabContactState extends State<TabContact> {
     _loadWorlds();
   }
 
-  //粘贴对话框：多行输入区为主入口（AI 输出直接复制粘贴）；
-  //次入口「从文件选择」：选 .txt/.md 回填到输入框（已有存档文件的用户）。返回全文或 null（取消）
+  //粘贴对话框（已抽为共享组件 widget/paste_dialog.dart，与教学大纲导入共用交互）
   Future<String?> _pasteDialog() {
-    final textC = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('导入外部导师'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            TextField(
-              controller: textC,
-              maxLines: 8,
-              autofocus: true,
-              decoration: const InputDecoration(
-                hintText: '粘贴按「导师参考提示词」生成的全文…',
-              ),
-            ),
-            TextButton.icon(
-              onPressed: () async {
-                try {
-                  final file = await openFile(
-                    acceptedTypeGroups: const [
-                      XTypeGroup(label: '文本', extensions: ['txt', 'md', 'text']),
-                    ],
-                  );
-                  if (file == null) return; //用户取消选择
-                  textC.text = await file.readAsString();
-                } catch (e) {
-                  //选择器不可用或读取失败：不影响粘贴主路径，框内提示
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('文件读取不可用：$e'),
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                }
-              },
-              icon: const Icon(Icons.description_outlined, size: 16),
-              label: const Text('从文件选择', style: TextStyle(fontSize: 13)),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, textC.text),
-            child: const Text('导入'),
-          ),
-        ],
-      ),
+    return showPasteImportDialog(
+      context,
+      title: '导入外部导师',
+      hint: '粘贴按「导师参考提示词」生成的全文…',
     );
   }
 

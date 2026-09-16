@@ -124,6 +124,7 @@ class _TabSettingState extends State<TabSetting> {
                 _buildApiSummary(), //当前 API 配置摘要（点击进入配置对话框）
                 _buildUsageEntry(), //用量统计入口（往期课程 token 消耗）
                 _buildTutorTemplateEntry(), //导师参考提示词（复制模板 → 应用外生成自定义导师组）
+                _buildOutlinePromptEntry(), //大纲提示词（复制 → 应用外生成格式合规的教学大纲）
                 const SizedBox(height: 32),
                 Center(
                   //运行时读 pubspec version（package_info_plus），不再硬编码；
@@ -292,22 +293,47 @@ class _TabSettingState extends State<TabSetting> {
           title: const Text('导师参考提示词'),
           subtitle: const Text('复制模板，应用外生成自定义导师组'),
           trailing: const Icon(Icons.chevron_right),
-          onTap: _showTemplateDialog,
+          onTap: () => _showPromptDialog(
+            '导师参考提示词',
+            'assets/prompts/tutor_template.md',
+          ),
         ),
       ),
     );
   }
 
-  //模板对话框：展示 tutor_template.md 全文（可选可复制），一键复制全文
-  Future<void> _showTemplateDialog() async {
+  //大纲提示词入口卡：大纲即进度文件（doc/06），格式不合规则导入被拒——
+  //用提示词在外部 AI 中生成，比手写更不容易出格式偏差
+  Widget _buildOutlinePromptEntry() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Material(
+        color: AppColors.of(context).surface,
+        child: ListTile(
+          leading: const Icon(Icons.checklist_outlined),
+          title: const Text('大纲生成提示词'),
+          subtitle: const Text('复制提示词，应用外生成教学大纲'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _showPromptDialog(
+            '大纲生成提示词',
+            'assets/prompts/outline_gen.md',
+          ),
+        ),
+      ),
+    );
+  }
+
+  //提示词对话框：展示 assets/prompts 下的文本（可选可复制），一键复制全文
+  //导师模板与大纲提示词共用（同一交互，只换标题与资产）
+  Future<void> _showPromptDialog(String title, String asset) async {
     String text;
     try {
-      text = await rootBundle.loadString('assets/prompts/tutor_template.md');
+      text = await rootBundle.loadString(asset);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('模板加载失败：$e'),
+          content: Text('提示词加载失败：$e'),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -317,7 +343,7 @@ class _TabSettingState extends State<TabSetting> {
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('导师参考提示词'),
+        title: Text(title),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(

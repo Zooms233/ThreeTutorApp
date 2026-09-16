@@ -4,9 +4,11 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:three_tutor/page/chat/group_chat_page.dart';
+import 'package:three_tutor/service/outline.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/theme/app_colors.dart';
+import 'package:three_tutor/widget/paste_dialog.dart';
 
 //创建课程表单：从导师资料页「创建群聊」进入
 //导师世界由发起的导师决定（不提供选择），完成即建课
@@ -25,7 +27,8 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
   final _learnerName = TextEditingController();
   final _motivation = TextEditingController();
   final _extra = TextEditingController();
-  String? _syllabusPath; //选中的教学大纲文件路径（可选，教学范围，仅一份）
+  String? _syllabusText; //教学大纲全文（可选，教学范围，仅一份；粘贴/文件两条路径统一持文本）
+  String? _syllabusSource; //来源显示名（文件名或「粘贴内容」），点按清除
   final List<String> _textbookPaths = []; //选中的教学材料文件路径（可选，可多份）
   bool _submitting = false; //提交中：防重复建课
   bool _extracting = false; //提炼中：防重复触发提炼请求
@@ -34,7 +37,27 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
   //课程名 = 课程目录名，禁止文件系统非法字符
   static final _invalidChars = RegExp(r'[\\/:*?"<>|]');
 
-  //选择单个文件（大纲）：Windows 弹资源管理器，Android 走系统选择器（SAF）
+  //粘贴导入大纲（主入口，与导师组导入同模式）：校验通过后持有全文，提交时统一文本入库
+  Future<void> _pasteSyllabus() async {
+    final text = await showPasteImportDialog(
+      context,
+      title: '导入教学大纲',
+      hint: '粘贴按「大纲生成提示词」生成的全文…',
+    );
+    if (text == null || !mounted) return; //取消即不动
+    final (_, errors) = Outline.parse(text);
+    if (!mounted) return;
+    if (errors.isNotEmpty) {
+      await _showOutlineErrors(errors);
+      return;
+    }
+    setState(() {
+      _syllabusText = text;
+      _syllabusSource = '粘贴内容（${text.trim().split('\n').length} 行）';
+    });
+  }
+
+  //选择大纲文件（次入口，已有存档文件的用户）：读出全文持有，路径只作取文本手段
   Future<void> _pickSyllabus() async {
     final XFile? file;
     try {
@@ -52,7 +75,51 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     }
     if (file == null) return; //用户取消选择
     final path = file.path; //先取出路径（闭包内无法使用可空变量的类型提升）
-    setState(() => _syllabusPath = path);
+    //大纲即进度文件（doc/06）：选定即校验，格式错误当场暴露并展示行号清单，
+    //而非等到建课才拦截；不通过则不记录选择
+    final text = await file.readAsString();
+    final (_, errors) = Outline.parse(text);
+    if (!mounted) return;
+    if (errors.isNotEmpty) {
+      await _showOutlineErrors(errors);
+      return;
+    }
+    setState(() {
+      _syllabusText = text;
+      _syllabusSource = _fileNameOf(path);
+    });
+  }
+
+  //大纲校验错误清单：对话框逐条展示（SnackBar 容不下多条且一闪即逝）
+  Future<void> _showOutlineErrors(List<OutlineError> errors) {
+    return showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('大纲格式校验未通过'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final e in errors)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    e.lineNo > 0 ? '第 ${e.lineNo} 行：${e.message}' : e.message,
+                    style: const TextStyle(fontSize: 13, height: 1.4),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
   }
 
   //选择多个文件（教学材料，可多份）
@@ -101,15 +168,15 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
       motivation: _motivation.text.trim(),
       extra: _extra.text.trim(),
       textbookPaths: _textbookPaths,
-      syllabusPath: _syllabusPath,
+      syllabusText: _syllabusText,
     );
 
     if (!mounted) return;
     if (error != null) {
-      //建课失败（如同名课程已存在）：提示并留在表单
+      //建课失败（同名已存在/大纲校验未通过）：提示并留在表单；错误可能多行，延长展示
       setState(() => _submitting = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error), duration: const Duration(seconds: 1)),
+        SnackBar(content: Text(error), duration: const Duration(seconds: 3)),
       );
       return;
     }
@@ -221,7 +288,7 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
     );
   }
 
-  //教学大纲行（仅一份）：标签 + 已选文件名（点按清除）或「选择文件」按钮
+  //教学大纲行（仅一份）：标签 + 粘贴导入（主）/选择文件（次），已选显示来源（点按清除）
   Widget _buildSyllabusRow() {
     final c = AppColors.of(context);
     return Container(
@@ -235,20 +302,28 @@ class _CreateCoursePageState extends State<CreateCoursePage> {
             style: TextStyle(fontSize: 13, color: c.textFaint),
           ),
           const Spacer(),
-          if (_syllabusPath != null)
+          if (_syllabusText != null)
             GestureDetector(
-              onTap: () => setState(() => _syllabusPath = null),
+              onTap: () => setState(() {
+                _syllabusText = null;
+                _syllabusSource = null;
+              }),
               child: Text(
-                _fileNameOf(_syllabusPath!),
+                _syllabusSource!,
                 style: TextStyle(fontSize: 14, color: c.accent),
                 overflow: TextOverflow.ellipsis,
               ),
             )
-          else
+          else ...[
+            TextButton(
+              onPressed: _pasteSyllabus,
+              child: const Text('粘贴导入', style: TextStyle(fontSize: 14)),
+            ),
             TextButton(
               onPressed: _pickSyllabus,
               child: const Text('选择文件', style: TextStyle(fontSize: 14)),
             ),
+          ],
         ],
       ),
     );

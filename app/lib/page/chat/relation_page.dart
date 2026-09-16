@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/theme/app_colors.dart';
+import 'package:three_tutor/widget/paste_dialog.dart';
 
 //课程资料页（原关系页）：学习者信息 + 教学大纲/材料管理 + 导师关系
 //建课字段的建后管理入口：学习者（称呼/动力/其他）与大纲/材料均与建课表单一致；
@@ -71,8 +72,31 @@ class _RelationPageState extends State<RelationPage> {
 
   // —— 教学大纲 / 教学材料（添加、删除）——
 
-  //选择文件并导入指定分区；大纲仅一份（自动覆盖旧文件）
-  Future<void> _addMaterial(String sub) async {
+  //导入/更换教学大纲：与导师组导入同模式——粘贴为主入口，文件回填为次入口；
+  //大纲即进度文件（doc/06），校验不过展示行号错误且不动现有大纲
+  Future<void> _importOutline() async {
+    final text = await showPasteImportDialog(
+      context,
+      title: '导入教学大纲',
+      hint: '粘贴按「大纲生成提示词」生成的全文…',
+    );
+    if (text == null || !mounted) return; //取消即不动
+    final error = await StorageService().saveCourseOutline(
+      widget.courseName,
+      text,
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error ?? '大纲已导入'),
+        duration: Duration(seconds: error == null ? 1 : 3),
+      ),
+    );
+    if (error == null) _load();
+  }
+
+  //选择文件并导入教学材料（TEXTBOOK，可多份）
+  Future<void> _addTextbook() async {
     final XFile? file;
     try {
       file = await openFile();
@@ -90,13 +114,12 @@ class _RelationPageState extends State<RelationPage> {
     if (file == null) return; //用户取消选择
     final error = await StorageService().addCourseMaterial(
       widget.courseName,
-      sub,
       file.path,
     );
     if (!mounted) return;
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error), duration: const Duration(seconds: 2)),
+        SnackBar(content: Text(error), duration: const Duration(seconds: 3)),
       );
       return;
     }
@@ -157,7 +180,7 @@ class _RelationPageState extends State<RelationPage> {
               ),
               const Spacer(),
               TextButton(
-                onPressed: () => _addMaterial('OUTLINE'),
+                onPressed: _importOutline,
                 child: Text(current == null ? '添加' : '更换'),
               ),
             ],
@@ -168,7 +191,7 @@ class _RelationPageState extends State<RelationPage> {
           ),
           const SizedBox(height: 4),
           Text(
-            '大纲定义教学范围，有则按大纲推进；文本文件（md/txt）',
+            '大纲定义教学范围，有则按大纲推进；可粘贴或选文件导入，格式见设置页提示词',
             style: TextStyle(fontSize: 12, color: c.textSecondary),
           ),
         ],
@@ -194,8 +217,8 @@ class _RelationPageState extends State<RelationPage> {
                 style: TextStyle(fontSize: 13, color: c.textFaint),
               ),
               const Spacer(),
-              TextButton(
-                onPressed: () => _addMaterial('TEXTBOOK'),
+                TextButton(
+                onPressed: _addTextbook,
                 child: const Text('添加文件'),
               ),
             ],

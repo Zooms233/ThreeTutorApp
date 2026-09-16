@@ -1,6 +1,8 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:three_tutor/page/chat/relation_page.dart';
+import 'package:three_tutor/page/chat/syllabus_page.dart';
+import 'package:three_tutor/service/outline.dart';
 import 'package:three_tutor/service/storage.dart';
 import 'package:three_tutor/service/three_tutor_service.dart';
 import 'package:three_tutor/theme/app_colors.dart';
@@ -19,6 +21,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   Map<String, dynamic> _state = {};
   Map<String, dynamic>? _meta; //最新课次 meta（上课控制按钮状态判定；null=从未上课）
   List<Map<String, dynamic>> _progress = []; //知识点（新在前）
+  OutlineDoc? _outline; //大纲解析结果（大纲即进度文件，doc/06；null=无大纲或不合规）
   final Set<int> _expanded = {}; //展开全部历史状态块的知识点索引
   bool _loading = true;
 
@@ -44,18 +47,26 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
   bool get _courseBusy =>
       ThreeTutorService.busyLabelOf(widget.courseName).isNotEmpty;
 
-  //读取 STATE、PROGRESS 与最新课次 meta 并刷新
+  //读取 STATE、PROGRESS、最新课次 meta 与大纲进度并刷新
   Future<void> _load() async {
     final state = await StorageService().loadCourseState(widget.courseName);
     final progress = await StorageService().loadCourseProgress(
       widget.courseName,
     );
     final meta = await StorageService().loadLatestChatMeta(widget.courseName);
+    //大纲即进度文件：解析出当前节/完成计数作摘要，清单页详情
+    final outlineText = await StorageService().loadCourseOutline(
+      widget.courseName,
+    );
+    final (doc, _) = outlineText == null
+        ? (null, const <OutlineError>[])
+        : Outline.parse(outlineText);
     if (!mounted) return; //await 等待期间页面可能已被销毁，先确认还活着再刷新
     setState(() {
       _state = state;
       _progress = progress;
       _meta = meta;
+      _outline = doc;
       _loading = false;
     });
   }
@@ -95,6 +106,7 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
           : ListView(
               children: [
                 _buildStateCard(),
+                _buildOutlineRow(), //教学进度：大纲即进度文件，从大纲派生（doc/06）
                 _buildRelationRow(),
                 _buildProgressSection(),
               ],
@@ -102,9 +114,8 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     );
   }
 
-  //状态四项（读 STATE）
+  //状态三行（读 STATE）：position 已退役——进度由大纲派生（doc/06），见 _buildOutlineRow
   Widget _buildStateCard() {
-    final position = _state['position'] as String? ?? '';
     final nextTutor = _state['next_tutor'] as String? ?? '';
     final lessons = _state['lessons'] as int? ?? 0;
     final lastDate = _state['last_date'] as String? ?? '';
@@ -114,7 +125,6 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
       margin: const EdgeInsets.only(bottom: 8),
       child: Column(
         children: [
-          _buildStateRow('当前讲授位置', position.isEmpty ? '—' : position),
           _buildStateRow('下一节课授课导师', nextTutor.isEmpty ? '—' : nextTutor),
           _buildStateRow('累计课时', '$lessons'),
           _buildStateRow('最近上课日期', lastDate.isEmpty ? '—' : lastDate),
@@ -138,7 +148,50 @@ class _CourseDetailPageState extends State<CourseDetailPage> {
     );
   }
 
-  //课程资料入口（学习者信息/教学大纲与材料/导师关系）→ 课程资料页
+  //教学进度入口行：摘要（当前节 + 完成计数）由大纲派生，点击进入清单页
+  Widget _buildOutlineRow() {
+    final doc = _outline;
+    final value = doc == null
+        ? '未设置大纲'
+        : switch (doc.firstPending) {
+            null => '已学完全部内容',
+            final p => '${_sectionTitleOf(doc, p)} · ${doc.doneItems}/${doc.totalItems}',
+          };
+    return Container(
+      color: AppColors.of(context).surface,
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: Colors.transparent, //水波纹不被白底吞
+        child: ListTile(
+          title: const Text('教学进度'),
+          subtitle: Text(value, style: const TextStyle(fontSize: 12)),
+          trailing: Icon(
+            Icons.chevron_right,
+            color: AppColors.of(context).iconFaint,
+          ),
+          onTap: () async {
+            await Navigator.push(
+              context,
+              CupertinoPageRoute(
+                builder: (context) => SyllabusPage(courseName: widget.courseName),
+              ),
+            );
+            if (mounted) _load(); //返回即刷新：外部可能改过大纲文件
+          },
+        ),
+      ),
+    );
+  }
+
+  //知识点所在节标题（摘要用）
+  String _sectionTitleOf(OutlineDoc doc, OutlineItem item) {
+    for (final ch in doc.chapters) {
+      for (final sec in ch.sections) {
+        if (sec.items.contains(item)) return sec.title;
+      }
+    }
+    return '';
+  }
   Widget _buildRelationRow() {
     return Container(
       color: AppColors.of(context).surface,

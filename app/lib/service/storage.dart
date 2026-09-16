@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:three_tutor/service/outline.dart';
 
 class StorageService {
   //数据根目录（按平台）：
@@ -141,10 +142,19 @@ class StorageService {
     required String motivation,
     String extra = '',
     List<String>? textbookPaths, //教学材料（可选，可多份，参考数据库，TEXTBOOK/）
-    String? syllabusPath, //教学大纲（可选，教学范围，OUTLINE/）
+    String? syllabusText, //教学大纲全文（可选，教学范围，OUTLINE/）——调用方已选定/粘贴，这里统一文本入库
   }) async {
     final courseDir = await getCourseDir(courseName);
     if (courseDir.existsSync()) return '同名课程已存在';
+
+    //大纲即进度文件（doc/06）：入库即校验，不合格拒绝建课——不静默收下不合规格大纲；
+    //放在建目录之前：失败时无半成品残留
+    if (syllabusText != null && syllabusText.trim().isNotEmpty) {
+      final (_, errors) = Outline.parse(syllabusText);
+      if (errors.isNotEmpty) {
+        return '大纲格式校验未通过：${Outline.summarize(errors)}';
+      }
+    }
 
     try {
       await courseDir.create(recursive: true);
@@ -182,9 +192,13 @@ class StorageService {
       for (final p in textbookPaths ?? const <String>[]) {
         await _copyIntoCourse(courseDir, 'TEXTBOOK', p);
       }
-      //教学大纲（可选）：复制进课程 OUTLINE/ 目录（教学范围，短，全文注入）
-      if (syllabusPath != null) {
-        await _copyIntoCourse(courseDir, 'OUTLINE', syllabusPath);
+      //教学大纲（可选）：全文写入 OUTLINE/（大纲即进度文件，文本统一入库，文件名固定）
+      if (syllabusText != null && syllabusText.trim().isNotEmpty) {
+        final dir = Directory('${courseDir.path}/OUTLINE');
+        await dir.create(recursive: true);
+        await File('${dir.path}/$courseName-outline.txt').writeAsString(
+          syllabusText,
+        );
       }
       return null;
     } catch (e) {
@@ -705,6 +719,14 @@ class StorageService {
     };
   }
 
+  //读课程教学大纲全文（大纲即进度文件，仅一份；无则 null）
+  Future<String?> loadCourseOutline(String courseName) async {
+    final courseDir = await getCourseDir(courseName);
+    final names = await _listSubFiles(courseDir, 'OUTLINE');
+    if (names.isEmpty) return null;
+    return File('${courseDir.path}/OUTLINE/${names.first}').readAsString();
+  }
+
   Future<List<String>> _listSubFiles(Directory courseDir, String sub) async {
     final dir = Directory('${courseDir.path}/$sub');
     if (!dir.existsSync()) return [];
@@ -718,25 +740,43 @@ class StorageService {
     return names;
   }
 
-  //添加教学材料/大纲：复制进课程子目录；大纲仅一份（先清旧文件再复制，即「更换」）
+  //添加教学材料：复制进课程 TEXTBOOK/ 子目录（参考数据库，格式不限）。
+  //教学大纲不走这里：大纲即进度文件（doc/06），走 saveCourseOutline（文本 + 校验）
   //返回 null=成功；返回字符串=失败原因
   Future<String?> addCourseMaterial(
     String courseName,
-    String sub, //'OUTLINE' | 'TEXTBOOK'
     String sourcePath,
   ) async {
     try {
       final courseDir = await getCourseDir(courseName);
-      final dir = Directory('${courseDir.path}/$sub');
+      final dir = Directory('${courseDir.path}/TEXTBOOK');
       await dir.create(recursive: true);
       final name = sourcePath.split(Platform.pathSeparator).last;
-      if (sub == 'OUTLINE') {
-        //仅一份：清掉旧大纲（更换语义）
-        for (final e in dir.listSync()) {
-          if (e is File) await e.delete();
-        }
-      }
       await File(sourcePath).copy('${dir.path}/$name');
+      return null;
+    } catch (e) {
+      return '导入失败：$e';
+    }
+  }
+
+  //写入/更换教学大纲：大纲即进度文件（doc/06）——先校验后清旧再写新（固定文件名），
+  //校验失败时旧大纲原样保留。粘贴与文件回填两条路径统一收拢于此
+  //返回 null=成功；返回字符串=失败原因
+  Future<String?> saveCourseOutline(String courseName, String text) async {
+    if (text.trim().isEmpty) return '大纲内容为空';
+    final (_, errors) = Outline.parse(text);
+    if (errors.isNotEmpty) {
+      return '大纲格式校验未通过：${Outline.summarize(errors)}';
+    }
+    try {
+      final courseDir = await getCourseDir(courseName);
+      final dir = Directory('${courseDir.path}/OUTLINE');
+      await dir.create(recursive: true);
+      //仅一份：清掉旧大纲（更换语义）
+      for (final e in dir.listSync()) {
+        if (e is File) await e.delete();
+      }
+      await File('${dir.path}/$courseName-outline.txt').writeAsString(text);
       return null;
     } catch (e) {
       return '导入失败：$e';
