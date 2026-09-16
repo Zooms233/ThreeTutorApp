@@ -75,6 +75,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   bool _loading = true;
   final _scrollController = ScrollController();
   final _inputController = TextEditingController(); //输入框
+  final _inputFocus = FocusNode(); //输入框焦点（桌面端生成结束自动回焦用）
   final _service = ThreeTutorService(); //编排层：三态判定 + 各场景收发与上下课
   final _cardKey = GlobalKey(); //离屏聊天卡片截图锚点
   Widget? _shareCard; //待截图的卡片（非空时挂屏外渲染，截完即卸）
@@ -86,7 +87,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
   bool _flushingQueue = false; //消费循环进行中（防重入 + busy 变更时 reload 避让判断）
   static const _socialGap = Duration(seconds: 2); //逐条显示间隔
 
+  bool _wasBusy = false; //上次已知 busy 状态（listener 触发时静态表已更新，无法事后读旧值）
+
   bool get _busy => _busyLabel.isNotEmpty; //LLM 生成进行中（Banner 提示 + 输入框暂锁）
+
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
   @override
   void initState() {
@@ -101,6 +107,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
     ThreeTutorService.busyVersion.removeListener(_onBusyChanged); //移除生成中状态监听
     _scrollController.dispose(); //页面销毁时释放滚动控制器
     _inputController.dispose(); //释放输入控制器，避免内存泄漏
+    _inputFocus.dispose(); //释放输入框焦点节点
     super.dispose();
   }
 
@@ -109,9 +116,24 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //本页群聊队列消费中则跳过：未显示消息正逐条上屏，reload 会把它们一次性提前揭示。
   void _onBusyChanged() {
     if (!mounted) return;
-    final wasBusy = _busy;
+    final wasBusy = _wasBusy; //旧值页面自持：busyVersion 通知到达时静态表已更新，实时读恒为空
+    _wasBusy = _busy;
     setState(() {}); //文案经 getter 即时读静态表
-    if (wasBusy && !_busy && !_flushingQueue) _reload();
+    if (wasBusy && !_busy) {
+      if (!_flushingQueue) _reload();
+      _refocusInput(); //本页课程生成结束：桌面端焦点回输入框，省一次点击
+    }
+  }
+
+  //桌面端生成结束后焦点回输入框：disabled 释放的焦点不会自动恢复（enabled:!_busy 暂锁所致）。
+  //仅桌面——移动端自动聚焦会弹软键盘，把刚生成的回复顶上去；本页课程 busy→空才触发，
+  //后台其他课程结束不抢（wasBusy 按本课程 label 判定）；发送失败内容回框时同路径受益。
+  //postFrame 等输入框 enabled 恢复重建后再取焦，避免落在禁用态上
+  void _refocusInput() {
+    if (!_isDesktop) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _inputFocus.requestFocus();
+    });
   }
 
   //初始加载：转圈后走同一套加载逻辑
@@ -1374,7 +1396,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   },
                   child: TextField(
                     controller: _inputController,
-                    enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁
+                    focusNode: _inputFocus,
+                    enabled: !_busy, //LLM 生成期间暂锁，回复落档后解锁（桌面端自动回焦）
                     minLines: 1,
                     maxLines: 6, //多行输入，超过 6 行内部滚动
                     keyboardType: TextInputType.multiline,
