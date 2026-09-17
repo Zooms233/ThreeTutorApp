@@ -361,20 +361,32 @@ class ThreeTutorService {
     'content': content,
   });
 
+  //导师回复落档：按分段标记（单独成行 ---，teaching.md 约定）拆为多条 message 行——
+  //数据即消息：渲染/复制/导出零特判；reasoning 随首行（回传时 _mapHistory 把相邻
+  //teaching 导师行并回一条取首行，content 以 --- 还原生成形态）
   Future<void> _appendTutor(
     String path,
     String name,
     String content,
     String phase, {
     String reasoning = '', //思考链随档落档（教学组开思考时历史回传用）
-  }) => _storage.appendChatMessage(path, {
-    'type': 'message',
-    'phase': phase,
-    'role': 'tutor',
-    'name': name,
-    'content': content,
-    if (reasoning.isNotEmpty) 'reasoning': reasoning,
-  });
+  }) async {
+    final segments = content
+        .split(tutorSegmentMarker)
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    for (var i = 0; i < segments.length; i++) {
+      await _storage.appendChatMessage(path, {
+        'type': 'message',
+        'phase': phase,
+        'role': 'tutor',
+        'name': name,
+        'content': segments[i],
+        if (i == 0 && reasoning.isNotEmpty) 'reasoning': reasoning,
+      });
+    }
+  }
 
   //修改重发定位：改写文件中物理最后一条 user 行（content + time=编辑时刻）并截断其后所有行。
   //安全性依据（UI 已判定长按消息 = 当前流目标文件的最后一条 user 行）：该行之后只可能是

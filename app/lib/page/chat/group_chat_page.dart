@@ -1238,6 +1238,7 @@ class _GroupChatPageState extends State<GroupChatPage> {
   //消息正文用 GptMarkdown 渲染：支持斜体旁白（*...* 与 _..._，后者渲染前规范化为前者）、标题、列表与 LaTeX 公式（$...$ 行内、$$...$$ 独立行）
 
   //导师消息：头像 + 名字 + 白色气泡，左对齐；气泡最大宽度约屏宽 72%
+  //教学回复的分段（--- 分隔）在落档时已拆成多条 message 行，此处天然逐条渲染为连发气泡
   Widget _buildTutorMessage(String name, String content) {
     final c = AppColors.of(context);
     final maxWidth = MediaQuery.sizeOf(context).width * 0.72;

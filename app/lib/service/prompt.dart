@@ -37,6 +37,9 @@ class PromptMessage {
 
 const _textbookLimit = 8000; //教材当前节截断上限（注入与物化共用）
 
+//教学回复分段标记：单独成行的 ---（teaching.md 约定）——service 落档拆行与 _mapHistory 合并共用
+final RegExp tutorSegmentMarker = RegExp(r'^---[ \t]*$', multiLine: true);
+
 //按字符预算保留整行数：返回可保留的行数（不拦腰断行；单行超限至少保留首行）
 int _keptLineCount(List<String> lines) {
   var used = 0;
@@ -529,10 +532,31 @@ class PromptBuilder {
     final file = File(chatPath);
     if (!file.existsSync()) return [];
     final mapped = <PromptMessage>[];
+    //教学拆分段落缓冲：落档时一条回复按 --- 拆成多行 message（teaching.md 分段约定），
+    //此处把相邻 teaching 导师行并回一条再回传——content 以 --- 还原生成形态
+    //（与未拆分落档字节一致，缓存前缀无损），reasoning 随首行；边界行与文件尾各自 flush
+    StringBuffer? teachBuf;
+    String? teachReasoning;
+    void flushTeachBuf() {
+      if (teachBuf == null) return;
+      mapped.add(
+        PromptMessage(
+          'assistant',
+          teachBuf.toString(),
+          null,
+          null,
+          teachReasoning,
+        ),
+      );
+      teachBuf = null;
+      teachReasoning = null;
+    }
+
     for (final line in await file.readAsLines()) {
       if (line.trim().isEmpty) continue;
       final row = jsonDecode(line) as Map<String, dynamic>;
       if (row['type'] == 'textbook') {
+        flushTeachBuf();
         final mat = materializeTextbookSection(
           courseDir,
           row['file'] as String? ?? '',
@@ -546,6 +570,7 @@ class PromptBuilder {
         //——与首轮请求的 assistant 消息字节级一致，缓存前缀延续；
         //reasoning 随行回传（教学组开思考时存档；DeepSeek 硬约束：开思考的
         //历史 assistant 轮次必须回传 reasoning_content，否则 400）
+        flushTeachBuf();
         final toolCalls = (row['tool_calls'] as List<dynamic>?)
             ?.map((e) => e as Map<String, dynamic>)
             .toList();
@@ -564,6 +589,7 @@ class PromptBuilder {
         //tool 消息：优先用行内快照 content（执行失败场景），否则按指针物化读盘
         //（成功场景只存指针不存正文——材料未改则物化结果与首轮一致，缓存延续）
         //新格式指针 = path/offset/limit（通用 read）；旧格式 = file/section（read_textbook）
+        flushTeachBuf();
         final snap = row['content'] as String?;
         String? content = snap;
         if (content == null) {
@@ -594,30 +620,47 @@ class PromptBuilder {
       final isUser = row['role'] == 'user';
       var content = row['content'] as String? ?? '';
       if (isUser) {
+        flushTeachBuf();
         final time = row['time'] as String?;
         if (time != null && time.length >= 16) {
           content = '[${time.substring(5, 16)}] $content'; //MM-DD HH:mm，跨天节奏锚点
         }
+        if (mapped.isNotEmpty && mapped.last.role == 'user') {
+          mapped[mapped.length - 1] = PromptMessage(
+            'user',
+            '${mapped.last.content}\n$content',
+          );
+        } else {
+          mapped.add(PromptMessage('user', content));
+        }
+        continue;
       }
-      final role = isUser ? 'user' : 'assistant';
-      if (mapped.isNotEmpty && mapped.last.role == 'user' && role == 'user') {
-        mapped[mapped.length - 1] = PromptMessage(
-          'user',
-          '${mapped.last.content}\n$content',
-        );
-      } else {
-        //assistant 回复行：开思考时代的 reasoning 随行回传（老档案无该字段，不回传）
-        mapped.add(
-          PromptMessage(
-            role,
-            content,
-            null,
-            null,
-            isUser ? null : row['reasoning'] as String?,
-          ),
-        );
+      //教学导师行：缓冲并段（相邻 teaching 行同属一条回复的拆分段落，物理相邻由
+      //落档拆行的顺序写入保证）；social/qa 行单条不拆，不走此分支
+      if (row['phase'] == 'teaching') {
+        if (teachBuf == null) {
+          teachBuf = StringBuffer(content);
+          teachReasoning = row['reasoning'] as String?;
+        } else {
+          teachBuf!
+            ..write('\n\n---\n\n')
+            ..write(content);
+        }
+        continue;
       }
+      flushTeachBuf();
+      //assistant 回复行：开思考时代的 reasoning 随行回传（老档案无该字段，不回传）
+      mapped.add(
+        PromptMessage(
+          'assistant',
+          content,
+          null,
+          null,
+          row['reasoning'] as String?,
+        ),
+      );
     }
+    flushTeachBuf();
     return mapped;
   }
 
